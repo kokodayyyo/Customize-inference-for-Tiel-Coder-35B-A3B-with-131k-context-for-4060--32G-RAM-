@@ -310,28 +310,38 @@ class LlamaBackendServer:
                     f"请确认存在 vendor 目录并把其中的 cudart/cublas DLL 加入 PATH。\n"
                     f"当前 vendor: {self.backend.vendor_dir}\n{detail}"
                 )
-            if outcome == "fatal":
-                raise RuntimeError(f"llama-server 启动失败（非显存问题）:\n{detail}")
+            # 注意：``fatal`` 也**继续试下一个 profile**，不再直接放弃。
+            # 教训：llama.cpp 在内存吃紧时会以硬断言崩溃
+            #   GGML_ASSERT(ctx->mem_buffer != NULL) failed
+            # 这不是"配置错误"，重试更省的 profile 往往就能起来。只有 DLL 缺失
+            # 这种环境问题才值得立刻终止。
 
             # 宿主内存（锁页内存）分配失败：换 mmap 用**同一套参数**再试一次。
             # mmap 下 CPU 张量来自文件映射、可回收，不需要一次性锁定十几 GiB
             # 物理内存，所以能绕开这个问题；代价是 decode 约慢 17%。
             # 这必须排在降 ubatch 之前——病因不在显存，降 ubatch 治不了。
-            if outcome == "host_mem" and prof.load_mode != "mmap":
+            #
+            # ``fatal``（崩溃/断言，例如内存吃紧时的
+            # GGML_ASSERT(ctx->mem_buffer != NULL) failed）原因不明，也先试 mmap；
+            # 但 ``oom`` 是明确的显存不足，试 mmap 必然无效，直接走降 ubatch。
+            if outcome in ("host_mem", "fatal") and prof.load_mode != "mmap":
+                reason = ("宿主内存锁定失败" if outcome == "host_mem"
+                          else "进程崩溃/断言失败，原因不明")
                 retry = replace(
                     prof,
                     load_mode="mmap",
-                    note=f"{prof.note} + 宿主内存不足，回落 mmap",
+                    note=f"{prof.note} + {reason}，回落 mmap",
                 )
                 attempts.insert(index, retry)
                 log.warning(
-                    "宿主内存锁定失败（--load-mode none 需要一次性锁定约 14.6 GiB "
-                    "锁页内存），改用 mmap 重试同一套参数…"
+                    "%s（--load-mode none 需一次性锁定约 14.6 GiB 锁页内存），"
+                    "改用 mmap 重试同一套参数…",
+                    reason,
                 )
                 time.sleep(1)
                 continue
 
-            log.warning("本次加载失败，准备降级重试…")
+            log.warning("本次加载失败（%s），准备降级重试…", outcome)
             time.sleep(2)
 
         raise RuntimeError(

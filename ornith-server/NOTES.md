@@ -386,6 +386,7 @@ Windows 上父进程终止不会结束子进程。`core/jobobject.py` 用 Job Ob
 
 | 脚本 | 用途 |
 |---|---|
+| `scripts/gguf_raw.py` | 转储 GGUF 元数据（看架构/专家数/全注意力层间隔）|
 | `scripts/gguf_tensors.py` | **精确张量账本**：专家 vs 其余、量化分布、每层专家体积 |
 | `scripts/moe_probe.py` | 单次 MoE 摆位实测（加载/显存/内存/decode/prefill）|
 | `scripts/moe_sweep.py` | 批量扫描与对比表，预设组 `default` / `ubatch` / `final` |
@@ -393,8 +394,13 @@ Windows 上父进程终止不会结束子进程。`core/jobobject.py` 用 Job Ob
 | `scripts/sysinfo.py` | 内存与磁盘（不依赖 WMI，避免权限问题）|
 | `scripts/diag_sse.py` | 打印流式响应原始片段（靠它发现 `reasoning_content`）|
 | `scripts/diag_usage.py` | 对比流式/非流式/`/metrics` 三种取数方式 |
-| `scripts/perf_matrix.py` | 上下文 × KV 位置性能矩阵 |
-| `scripts/ctx_scale.py` | 把上下文填充到不同比例后测真实速度 |
+| `scripts/fetch_runtime.py` | 克隆后恢复 `runtime/`（那些二进制不入库）|
+
+> 两个诊断脚本**不自己启动后端**，直接打一个已经在跑的服务（默认
+> `http://127.0.0.1:8000`）。早先它们通过 `calibrate.py` 自拉后端，但那个模块
+> 构造的命令行不含 MoE 参数，拿这个模型跑必然 OOM，已连同它派生出的
+> `ctx_scale.py` / `perf_matrix.py` 一起删除——功能分别由 `moe_probe.py` +
+> `moe_sweep.py` + `stress_ctx.py` 覆盖且更准确。
 
 ## 8. 参考
 

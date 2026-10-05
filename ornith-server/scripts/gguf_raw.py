@@ -1,10 +1,14 @@
 """转储 GGUF 全部元数据键值，用于确认 MoE 结构（专家数、共享专家等）。
 
-用法:
+拿到一个新模型时，先用它看清结构（层数、专家数、全注意力层间隔），
+再用 ``gguf_tensors.py`` 看字节账本。
+
+用法::
+
     python scripts/gguf_raw.py <model.gguf> [过滤子串]
+    python scripts/gguf_raw.py <model.gguf> --all      # 打印全部键
 
 不带过滤子串时只打印结构/注意力/专家相关键，避免刷屏（词表数组很大）。
-加 `--all` 打印全部键。
 """
 
 from __future__ import annotations
@@ -12,9 +16,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from gguf_info import read_metadata  # noqa: E402
+from ornith_server.core.gguf import read_metadata  # noqa: E402
 
 # 值得关注的键片段
 INTERESTING = (

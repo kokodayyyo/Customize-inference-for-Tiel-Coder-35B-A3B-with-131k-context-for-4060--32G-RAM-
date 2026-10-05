@@ -121,12 +121,23 @@ def _refuse_if_already_running(cfg: ServerConfig) -> int | None:
 
     from ornith_server.config import port_is_free
 
+    # 只认**我们自己**的服务：必须返回带这些字段的 JSON 才算。
+    # 不能"端口上有东西响应就拒绝"——实测踩过误判：端口上有个返回空体的东西
+    # （前一次实例正在退出的残留），旧逻辑直接拒绝启动，把正常启动也挡了。
     url = f"http://127.0.0.1:{cfg.proxy_port}/health"
+    data = None
     try:
         resp = httpx.get(url, timeout=3.0)
-        body = resp.text[:200]
-        print(f"检测到端口 {cfg.proxy_port} 上已有服务在运行：")
-        print(f"  {body}")
+        data = resp.json()
+    except (httpx.HTTPError, ValueError):
+        data = None
+
+    if isinstance(data, dict) and {"ready", "backend_running"} <= set(data):
+        print(f"检测到端口 {cfg.proxy_port} 上已有本服务在运行：")
+        print(f"  ready={data.get('ready')} pid={data.get('pid')} "
+              f"ctx={data.get('context_size')}")
+        if data.get("gpu"):
+            print(f"  显存空闲 {data['gpu'][0].get('free_gib')} GiB")
         print()
         print("拒绝启动第二个实例：两个实例会各加载一份 16.9 GiB 的模型，")
         print("而 --load-mode none 每次加载需锁定约 14.6 GiB 锁页内存，")
@@ -137,16 +148,15 @@ def _refuse_if_already_running(cfg: ServerConfig) -> int | None:
         print("  2) 先停掉它：stop_server.bat —— 然后重新启动")
         print(f"  3) 换端口启动：start_server.bat --port {cfg.proxy_port + 1}")
         return 2
-    except httpx.HTTPError:
-        pass
 
     if not port_is_free(cfg.proxy_host, cfg.proxy_port):
+        # 端口被别的程序占着。不在这里硬拒——交给 uvicorn 报权威错误，
+        # 这里只给一句提示（可能是刚退出的实例还没完全释放）。
         print(
-            f"端口 {cfg.proxy_port} 已被其它程序占用（不是本服务）。"
-            f"请换端口：--port {cfg.proxy_port + 1}",
+            f"[提示] 端口 {cfg.proxy_port} 当前不可用，可能是别的程序占用，"
+            f"或上一个实例正在退出。若启动失败请换端口：--port {cfg.proxy_port + 1}",
             file=sys.stderr,
         )
-        return 2
     return None
 
 
