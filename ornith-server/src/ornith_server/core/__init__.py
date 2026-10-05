@@ -1,0 +1,66 @@
+"""核心层：后端探测与进程管理。"""
+
+from .backend import (  # noqa: F401
+    GpuInfo,
+    LlamaBackend,
+    discover_backends,
+    dump_environment,
+    probe_backend,
+    query_gpus,
+    resolve_backend,
+    zero_vram,
+)
+from .gguf import (  # noqa: F401
+    GGML_TYPES,
+    KV_BYTES_PER_ELEMENT,
+    ModelShape,
+    TensorBreakdown,
+    TensorInfo,
+    compute_buffer_gib,
+    estimate_placement,
+    estimate_vram,
+    is_expert_tensor,
+    max_experts_on_gpu,
+    model_shape,
+    read_metadata,
+    read_tensors,
+    tensor_breakdown,
+)
+from .jobobject import ChildJob, describe_support  # noqa: F401
+from .server import (  # noqa: F401
+    LlamaBackendServer,
+    LoadProfile,
+    build_load_profiles,
+    make_backend,
+)
+
+__all__ = [
+    "ChildJob",
+    "GGML_TYPES",
+    "GpuInfo",
+    "KV_BYTES_PER_ELEMENT",
+    "LlamaBackend",
+    "LlamaBackendServer",
+    "LoadProfile",
+    "ModelShape",
+    "TensorBreakdown",
+    "TensorInfo",
+    "build_load_profiles",
+    "compute_buffer_gib",
+    "describe_support",
+    "discover_backends",
+    "dump_environment",
+    "estimate_placement",
+    "estimate_vram",
+    "is_expert_tensor",
+    "make_backend",
+    "max_experts_on_gpu",
+    "model_shape",
+    "probe_backend",
+    "query_gpus",
+    "read_metadata",
+    "read_tensors",
+    "resolve_backend",
+    "tensor_breakdown",
+    "zero_vram",
+]

@@ -1,0 +1,20 @@
+# Tile-35B-A3B 本地推理服务依赖
+#
+# 说明：推理本身由 llama.cpp 的 CUDA 后端完成，不经 Python 计算，
+# 因此不需要 torch。这些依赖只服务于网关层。
+
+# --- 运行必需 ---
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+httpx>=0.27.0
+pydantic>=2.5.0
+
+# --- 配置文件需要（config/server.yaml）---
+pyyaml>=6.0
+
+# --- 可选：把 Python 当 OpenAI 客户端用（scripts/client_example.py）---
+openai>=1.30.0
+
+# --- 可选：想在同一个进程内直接调用 llama.cpp（不走 HTTP）时安装 ---
+# 注意：pip 默认装的 llama-cpp-python 是 CPU 版，需要 CUDA 版请参考 README 的说明。
+# llama-cpp-python>=0.3.0

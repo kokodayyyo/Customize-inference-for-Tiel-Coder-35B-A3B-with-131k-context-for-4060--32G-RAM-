@@ -1,0 +1,97 @@
+# Tile-35B-A3B 本地推理服务配置
+# 所有字段都可以用环境变量 ORNITH_<字段名大写> 覆盖，命令行参数优先级最高。
+
+# ---------------- 模型 ----------------
+model_path: "D:/models/Tile/Tile-35BA3B/Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.gguf"
+model_alias: "tile-35b-a3b"
+# 该目录下另有 mmproj-BF16.gguf（0.84 GiB 视觉投影）。启用视觉会额外占显存，
+# 需要时取消下一行注释。
+# mmproj_path: "D:/models/Tile/Tile-35BA3B/mmproj-BF16.gguf"
+
+# ---------------- llama.cpp 后端 ----------------
+# 留空 = 优先使用项目自带的 runtime/llama.cpp/backends（已从 LM Studio 复制，
+# 自包含，不再依赖 LM Studio 是否安装）。
+llama_dir: ""
+
+# ---------------- MoE 专家权重摆位（本项目的核心）----------------
+# Tile-35B-A3B 的账本（由 scripts/gguf_tensors.py 从张量索引精确算出）：
+#   专家 *_exps        14.12 GiB  -> 内存
+#   其余权重            2.38 GiB  -> 显存
+#   MTP/nextn 死重      0.36 GiB  -> llama.cpp 忽略
+# 所以：专家全放内存，attention/SSM/embedding 上显存。
+cpu_moe: true
+# 显存有余量时，可以把最后几层的专家也放进显存换速度：
+#   n_cpu_moe = N  ->  前 N 层专家留内存，第 N..39 层专家进显存
+#   -1 表示不使用该参数（等价于 cpu_moe 全放内存）
+# 每层专家约 0.353 GiB，显存每多 1 GiB 可多放 2.83 层。
+# 实测（ubatch 2048 时）：n_cpu_moe=36 能到 decode 30.9 / prefill 1089；
+# 而 n_cpu_moe=32 会因为总显存冲到 7.9 GiB 而剧烈颠簸（decode 掉到 14.6）。
+# 显存天花板约 6.8 GiB，别贪。当前配置下用 `python main.py doctor` 会给出建议值。
+n_cpu_moe: -1
+# 逃生舱：直接透传 --override-tensor，按张量名做更细的摆位。例：
+# tensor_overrides:
+#   - 'blk\.(3[0-9])\.ffn_(gate|up|down)_exps\.weight=CUDA0'
+tensor_overrides: []
+
+# ---------------- 显存与上下文（RTX 4060 Laptop 8GB 实测标定）----------------
+gpu_layers: 99            # 99 = 非专家层全部卸载到 GPU
+context_size: 131072      # 128K 上下文
+parallel_slots: 1         # 并发槽位；每槽上下文 = context_size / parallel_slots
+
+# ubatch 是 MoE 下最重要的性能参数：每个 ubatch 都要把 256 个专家全过一遍，
+# 所以 ubatch 越大、同样 prompt 的往返越少。实测 prefill：
+#   256 -> 322 | 512 -> 443 | 1024 -> 772 | 2048 -> 1049 | 4096 -> 1207（崩）| 8192 -> 456（崩）
+#
+# ⚠ 4096 虽然更快，但**不安全**：在真实中文长提示下 llama.cpp 会抛
+#   CUDA error: an illegal memory access was encountered
+# 后端进程直接死掉、请求返回 502（4096 时显存只剩 1.78 GiB）。
+# 2048 稳（显存留 2.76 GiB），prefill 只比 4096 低 13%，所以取 2048。
+# 超过这个值会被自动夹紧，除非把 allow_large_ubatch 设成 true。
+ubatch_size: 2048
+batch_size: 8192          # 逻辑批，必须 >= ubatch_size
+allow_large_ubatch: false # true = 放开 ubatch 上限（仅供实验，会崩）
+
+flash_attention: true     # 必开：KV 量化需要它
+kv_cache_type_k: "q8_0"   # KV cache 量化
+kv_cache_type_v: "q8_0"
+# KV cache 放显存（true）还是内存（false）。
+# 本模型是混合注意力：40 个计算层里只有每 4 层中的 1 层是真注意力，其余是
+# 线性注意力（固定大小循环状态，不随上下文增长）。所以 128K 的 KV 只要
+# q8_0 约 1.33 GiB / f16 约 2.51 GiB —— 放显存既放得下又更快。
+# 已验证 --swa-full 对显存/速度没有任何影响，说明 128K 没有被滑窗截断。
+kv_offload: true
+
+# ---------------- CPU ----------------
+# Ryzen 9 7945HX：16 核 32 线程。实测 8 / 16 / 24 线程的 prefill 是
+# 434 / 426 / 442 tok/s，在噪声内——瓶颈不在线程数，而在 CPU 侧小批量专家
+# GEMM 的有效访存（约 13 GB/s）。留 16 给系统其它进程余量。
+threads: 16
+threads_batch: 0          # 0 = 与 threads 相同
+
+# ---------------- 加载与推理行为 ----------------
+# 模型加载模式：auto / mmap / mlock / mmap+mlock / none
+# none = 不用 mmap。实测 decode 快 17%（24.95 -> 29.34 tok/s），llama.cpp 自己
+# 也会提示 "tensor overrides to CPU are used with mmap enabled - consider
+# using --load-mode none"。代价：加载 3.5s -> 11.6s，且需要 17 GiB 常驻内存。
+load_mode: "none"
+no_warmup: true
+jinja: true               # 使用模型内置 chat template
+cont_batching: true
+metrics: true
+cache_reuse: 0            # 多轮长对话强烈建议设为 256：避免每轮重新预填充整个历史
+reasoning_budget: -1      # 该模型输出 <think> 思考段；>=0 可限制思考 token 数
+
+# ---------------- 网络 ----------------
+backend_host: "127.0.0.1" # llama.cpp 只监听本机，不直接暴露到内网
+backend_port: 8080
+proxy_host: "0.0.0.0"     # 内网 API 服务监听所有网卡
+proxy_port: 8000
+api_key: ""               # 留空 = 内网免鉴权；建议设置以限制调用方
+allow_origins: ["*"]
+
+# ---------------- 运行行为 ----------------
+autostart_backend: true
+startup_timeout: 300
+max_queue: 8              # 排队请求上限，超过返回 503
+request_timeout: 600
+log_requests: true
