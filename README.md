@@ -473,7 +473,8 @@ A: 把 `start_server.bat` 的快捷方式放进 `shell:startup`。
 A: 现在不行——llama.cpp 会打印 `model has unused tensor ... -- ignoring` 全部跳过，
 0.36 GiB 属于死重。等上游支持 `qwen35moe` 的 MTP 后可以用它做自投机解码。
 
-更详细的排查过程与**测量方法论**（怎么避免把性能数据测错）见 [`NOTES.md`](NOTES.md)。
+更详细的排查过程与**测量方法论**（怎么避免把性能数据测错）见
+[`ornith-server/NOTES.md`](ornith-server/NOTES.md)。
 
 ---
 
