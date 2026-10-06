@@ -9,6 +9,10 @@
 #   3. profile.match  作为**子串**出现在文件名里
 # 都没匹配上就用 default_profile。
 #
+# 视觉（mmproj）：模型**同目录**下的 mmproj*.gguf 会被自动识别，网页卡片上出现
+# 「视觉」开关（默认关，打开才加载）。想指定别的文件、或让它默认开启，就在该
+# profile 的 settings 里写 mmproj_path。
+#
 # settings 里的键名与 config/server.yaml 完全一致，只是按模型覆盖。
 # ============================================================
 
@@ -70,6 +74,7 @@ profiles:
       load_mode: "none"
       threads: 16
       gpu_layers: 99
+      # 同目录的 mmproj-BF16.gguf 会被自动识别；这里显式写 = 指定文件且默认开启
       # mmproj_path: "D:/models/Tile/Tile-35BA3B/mmproj-BF16.gguf"
     # **实测**值（有别于上面的理论估算）。界面会优先显示这些。
     # 原因：理论公式在基准版上分毫不差，在 apex 上却偏低 0.76 GiB，不能当依据。
@@ -116,6 +121,7 @@ profiles:
       load_mode: "none"
       threads: 16
       gpu_layers: 99
+      # 同目录的 mmproj-Q8_0.gguf 会被自动识别；这里显式写 = 指定文件且默认开启
       # mmproj_path: "D:/models/Tile/Tile-35BA3B apex/mmproj-Q8_0.gguf"
     # **实测**值。理论公式在这里偏低 0.76 GiB，所以界面显示实测值。
     # 数据来源：scripts/stress_ctx.py + scripts/moe_sweep.py

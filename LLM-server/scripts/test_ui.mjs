@@ -37,6 +37,7 @@ function check(name, ok, detail = "") {
 
 /* ---------------- 最小 DOM 桩 ---------------- */
 const elements = new Map();
+const created = []; // createElement() 造出来的元素（renderModels 的卡片），用于断言
 function makeEl(id) {
   return {
     id,
@@ -81,7 +82,9 @@ const document = {
     return [];
   },
   createElement(tag) {
-    return makeEl(tag);
+    const el = makeEl(tag);
+    created.push(el);
+    return el;
   },
   addEventListener() {},
 };
@@ -153,17 +156,30 @@ const SAMPLE_STATUS = {
   changed_fields: [], registry_error: "",
 };
 
-// /admin/models 的样例（renderModels 的输入）
-const SAMPLE_MODELS = [{
-  path: "D:\\models\\x.gguf", name: "Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1.gguf",
-  stem: "Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1", size_gib: 13.74,
-  is_projector: false, label: "Tile 35B-A3B APEX", note: "Q3_K+IQ3_XXS / 200K",
-  alias: "tile-35b-a3b-apex", matched: true, shape: "256 专家/激活 8 · 10/40 层全注意力",
-  context_max: 204800, active: false, error: "",
-  estimate: { context: 204800, resident_gib: 2.38, experts_ram_gib: 12.19, experts_vram_gib: 0,
-              kv_gib: 2.03, buffer_gib: 0.61, vram_total_gib: 5.02, measured: true },
-  measured: { vram_gib: 5.02, decode_tps: 30.5, prefill_tps: 1137 },
-}];
+// /admin/models 的样例（renderModels 的输入）：一个带视觉组件，一个纯文本
+const SAMPLE_MODELS = [
+  {
+    path: "D:\\models\\tile-apex\\Cyber-Tiel-Coder-35B-A3B.gguf",
+    name: "Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1.gguf",
+    stem: "Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1", size_gib: 13.74,
+    is_projector: false, label: "Tile 35B-A3B APEX", note: "Q3_K+IQ3_XXS / 200K",
+    alias: "tile-35b-a3b-apex", matched: true, shape: "256 专家/激活 8 · 10/40 层全注意力",
+    context_max: 204800, active: false, error: "",
+    vision_supported: true, vision_default: false,
+    mmproj: "D:\\models\\tile-apex\\mmproj-Q8_0.gguf",
+    estimate: { context: 204800, resident_gib: 2.38, experts_ram_gib: 12.19, experts_vram_gib: 0,
+                kv_gib: 2.03, buffer_gib: 0.61, vram_total_gib: 5.02, measured: true },
+    measured: { vram_gib: 5.02, decode_tps: 30.5, prefill_tps: 1137 },
+  },
+  {
+    path: "D:\\models\\plain-llm.gguf",
+    name: "plain-llm.gguf", stem: "plain-llm", size_gib: 7.0,
+    is_projector: false, label: "纯文本模型", note: "", alias: "plain-llm",
+    matched: false, shape: "40 层", context_max: 32768, active: false, error: "",
+    vision_supported: false, vision_default: false, mmproj: "",
+    estimate: {}, measured: {},
+  },
+];
 
 /* ---------------- 取出并执行页面脚本 ---------------- */
 const html = readFileSync(HTML, "utf8");
@@ -303,6 +319,17 @@ if (!runError) {
     check("状态栏按 GiB 格式化显存",
           (elements.get("s-vram")?.innerHTML || "").includes("1.69"),
           elements.get("s-vram")?.innerHTML);
+
+    // 视觉开关：只给检测到 mmproj 的模型卡片渲染
+    const visionCard = created.find((e) => (e.dataset.path || "").includes("tile-apex"));
+    const plainCard = created.find((e) => (e.dataset.path || "").includes("plain-llm"));
+    check("检测到视觉组件 → 卡片带视觉开关",
+          (visionCard?._html || "").includes("data-vision"),
+          `${(visionCard?._html || "").length} 字符`);
+    check("卡片显示 mmproj 文件名",
+          (visionCard?._html || "").includes("mmproj-Q8_0.gguf"), "");
+    check("无视觉组件 → 不显示视觉开关",
+          !(plainCard?._html || "").includes("data-vision"), "");
   }
 }
 

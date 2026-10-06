@@ -102,6 +102,18 @@
   canvas{width:100%;height:96px;display:block}
   .tile.wide{grid-column:1/-1}
   .kvtag{font-size:11px;padding:1px 7px;border-radius:5px;background:#2b3542;color:var(--dim)}
+
+  /* ---------- 视觉开关 ---------- */
+  .switch{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--dim);
+          cursor:pointer;user-select:none}
+  .switch input{position:absolute;opacity:0;width:0;height:0}
+  .switch .track{position:relative;width:36px;height:20px;border-radius:999px;flex:none;
+                 background:#2b3542;border:1px solid var(--line);transition:.15s}
+  .switch .track::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;
+                        border-radius:50%;background:#8b98a5;transition:.15s}
+  .switch input:checked + .track{background:rgba(63,185,80,.35);border-color:var(--accent)}
+  .switch input:checked + .track::after{left:18px;background:var(--accent)}
+  .switch input:disabled + .track{opacity:.45;cursor:not-allowed}
 </style>
 </head>
 <body>
@@ -175,6 +187,7 @@ let MODELS = [];
 let STATUS = {};
 let pollTimer = null;
 let polling = false;
+let VISION_SYNCED = null;  // 已经按运行结果回填过视觉开关的模型路径
 
 /* ---------- API Key（服务端启用鉴权时用） ---------- */
 function getKey(){ return localStorage.getItem('llm_api_key') || ''; }
@@ -240,6 +253,7 @@ async function fetchMetrics(){
 
 function n(v, d){ return (v===null||v===undefined||isNaN(v)) ? '—' : Number(v).toFixed(d===undefined?1:d); }
 function gi(v, d){ return (v===null||v===undefined) ? '—' : Number(v).toFixed(d===undefined?2:d) + ' GiB'; }
+function baseName(p){ return String(p||'').split(/[\\/]/).pop(); }
 function meterClass(p){ return p>=90?'hot':(p>=70?'warn':'ok'); }
 function meter(p, label){
   const v = Math.max(0, Math.min(100, p||0));
@@ -463,6 +477,18 @@ function renderStatus(){
   document.querySelectorAll('.card').forEach(c=>{
     c.classList.toggle('active', STATUS.state === 'running' && c.dataset.path === STATUS.active_path);
   });
+  // 视觉开关：加载中禁用；已就绪时按实际加载结果回填勾选状态。
+  // 只在"当前模型刚变成 running"时回填一次，否则每 2 秒的轮询会把用户刚拨的
+  // 开关又拨回去。
+  document.querySelectorAll('input[data-vision]').forEach(i=>{ i.disabled = busy; });
+  if(STATUS.state !== 'running'){
+    VISION_SYNCED = null;
+  }else if(STATUS.active_path !== VISION_SYNCED){
+    document.querySelectorAll('input[data-vision]').forEach(i=>{
+      if(i.dataset.vision === STATUS.active_path) i.checked = !!STATUS.mmproj_path;
+    });
+    VISION_SYNCED = STATUS.active_path || null;
+  }
 }
 
 function renderModels(){
@@ -493,10 +519,15 @@ function renderModels(){
           ${est.kv_gib!==undefined?`<span class="muted">（KV ${est.kv_gib.toFixed(2)}）</span>`:''}</span>
         <span class="k">内存占用</span><span>${est.experts_ram_gib!==undefined?est.experts_ram_gib.toFixed(2)+' GiB':'—'}</span>
         ${m.measured && m.measured.decode_tps ? `<span class="k">实测速度</span><span>decode ${m.measured.decode_tps} · prefill ${m.measured.prefill_tps||'—'} tok/s</span>` : ''}
+        ${m.vision_supported ? `<span class="k">视觉组件</span><span>${baseName(m.mmproj)}</span>` : ''}
         <span class="k">模型名</span><span>${m.alias}</span>
       </div>
       <div class="actions">
         <button class="primary" data-act="start" data-path="${m.path}">启动此模型</button>
+        ${m.vision_supported ? `<label class="switch" title="开启后一并加载视觉投影：${m.mmproj||''}">
+            <input type="checkbox" data-vision="${m.path}"${m.vision_default?' checked':''}>
+            <span class="track"></span>视觉
+          </label>` : ''}
         ${m.error?`<span class="tag warn">${m.error}</span>`:''}
       </div>`;
     box.appendChild(el);
@@ -509,17 +540,29 @@ function renderModels(){
 
 async function activate(path){
   const m = MODELS.find(x=>x.path===path);
-  if(!confirm(`确定启动「${m?m.label:path}」？\n\n如果已有模型在跑，会先停掉它再加载新的（约 10-15 秒）。`)) return;
+  const vision = visionWanted(path);   // undefined = 该模型无视觉组件
+  const extra = vision===undefined ? '' : (vision ? '\n（含视觉组件）' : '\n（不含视觉组件）');
+  if(!confirm(`确定启动「${m?m.label:path}」？${extra}\n\n如果已有模型在跑，会先停掉它再加载新的（约 10-15 秒）。`)) return;
+  const payload = { path };
+  if(vision !== undefined) payload.vision = vision;
   try{
     const r = await api('/admin/activate', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({path})
+      body: JSON.stringify(payload)
     });
     const j = await r.json().catch(()=>({}));
     if(!j.ok) toast(j.error || ('启动失败 HTTP ' + r.status));
     else { $('progress').style.display='block'; $('progress-msg').textContent='已受理，正在加载…'; }
   }catch(e){ toast('请求失败：'+e); }
   fetchStatus();
+}
+
+/* 卡片上的视觉开关：只有检测到 mmproj 的模型才有这个 input。
+   返回 true/false；模型没有视觉组件时返回 undefined（请求里就不带 vision 字段）。 */
+function visionWanted(path){
+  const inputs = document.querySelectorAll('input[data-vision]');
+  for(const el of inputs){ if(el.dataset.vision === path) return !!el.checked; }
+  return undefined;
 }
 
 $('btn-stop').onclick = async () => {

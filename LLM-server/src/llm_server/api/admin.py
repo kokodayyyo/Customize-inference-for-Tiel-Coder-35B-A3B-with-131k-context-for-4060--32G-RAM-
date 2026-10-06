@@ -98,6 +98,7 @@ class ModelManager:
             "busy": self.busy,
             "active_path": self.active_path,
             "alias": self.cfg.model_alias,
+            "mmproj_path": self.cfg.mmproj_path,
             "context_size": profile.context_size if profile else self.cfg.context_size,
             "ubatch": profile.ubatch_size if profile else self.cfg.effective_ubatch,
             "kv_type": profile.kv_type if profile else self.cfg.kv_cache_type_k,
@@ -304,8 +305,12 @@ class ModelManager:
         self.active_path = str(self.cfg.model_path)
         return True
 
-    def activate(self, model_path: str) -> dict[str, Any]:
-        """换到指定模型（异步）。返回是否已受理。"""
+    def activate(self, model_path: str, vision: bool | None = None) -> dict[str, Any]:
+        """换到指定模型（异步）。返回是否已受理。
+
+        ``vision``：前端视觉开关。True=加载 mmproj，False=不加载，None=沿用
+        模型 profile 的默认（没写就默认关闭）。
+        """
         if self.busy:
             return {"ok": False, "error": "正在加载中，请等当前模型加载完成"}
 
@@ -315,23 +320,33 @@ class ModelManager:
         if entry.is_projector:
             return {"ok": False, "error": "这是视觉投影文件（mmproj），不是可加载的模型"}
 
+        use_vision = entry.vision_default if vision is None else bool(vision)
+        if use_vision and not entry.vision_supported:
+            return {"ok": False, "error": "该模型没有检测到视觉组件（mmproj），无法开启视觉"}
+
         with self._lock:
             self.state = STATE_LOADING
             self.message = f"正在切换到 {entry.label}…"
             self._thread = threading.Thread(
-                target=self._activate_worker, args=(entry,), daemon=True, name="model-switch"
+                target=self._activate_worker, args=(entry, vision),
+                daemon=True, name="model-switch",
             )
             self._thread.start()
-        return {"ok": True, "model": entry.label, "path": str(entry.path)}
+        return {
+            "ok": True, "model": entry.label, "path": str(entry.path),
+            "vision": use_vision,
+            "mmproj": entry.mmproj_path if use_vision else "",
+        }
 
-    def _activate_worker(self, entry: ModelEntry) -> None:
+    def _activate_worker(self, entry: ModelEntry, vision: bool | None = None) -> None:
         if self.server is None:
             self.state = STATE_ERROR
             self.message = "没有可用的 llama.cpp 后端"
             return
+        use_vision = entry.vision_default if vision is None else bool(vision)
         started = time.time()
         try:
-            log.info("切换模型 -> %s", entry.path)
+            log.info("切换模型 -> %s (vision=%s)", entry.path, use_vision)
             self.message = "正在停止当前后端…"
             self.server.stop()
             # 旧模型已停：先摘掉"当前模型"标记。否则这次切换若失败，界面会把
@@ -340,6 +355,14 @@ class ModelManager:
             self.server.profile = None
 
             self.changed_fields = self.registry.apply_to_config(entry, self.cfg)
+            # 视觉开关：**总是显式设置**，否则从"开了视觉"的模型切到别的模型时
+            # cfg.mmproj_path 会残留，导致新模型意外加载旧模型的眼睛。
+            if use_vision:
+                if not entry.mmproj_path:
+                    raise RuntimeError("该模型没有检测到视觉组件（mmproj）")
+                self.cfg.mmproj_path = entry.mmproj_path
+            else:
+                self.cfg.mmproj_path = ""
             problems = self.cfg.validate()
             if problems:
                 raise RuntimeError("配置有问题：" + "；".join(problems))
@@ -426,7 +449,10 @@ def create_admin_router(manager: ModelManager, proxy: Any = None) -> APIRouter:
         path = str((body or {}).get("path") or "").strip()
         if not path:
             return JSONResponse({"ok": False, "error": "缺少 path"}, status_code=400)
-        result = manager.activate(path)
+        vision = (body or {}).get("vision")
+        if vision is not None:
+            vision = bool(vision)
+        result = manager.activate(path, vision=vision)
         return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
     @router.post("/admin/stop")

@@ -75,6 +75,8 @@ class ModelEntry:
     shape: ModelShape | None = None
     breakdown: TensorBreakdown | None = None
     error: str = ""
+    # 该模型可用的视觉投影（mmproj）路径，由 _attach_vision 关联；空 = 不支持视觉
+    mmproj_path: str = ""
 
     @property
     def label(self) -> str:
@@ -91,6 +93,17 @@ class ModelEntry:
     @property
     def alias(self) -> str:
         return str(self.settings.get("model_alias") or self.stem.lower().replace(".", "-"))
+
+    @property
+    def vision_supported(self) -> bool:
+        """是否检测到视觉组件（同目录 mmproj 或 profile 显式指定）。"""
+        return bool(self.mmproj_path)
+
+    @property
+    def vision_default(self) -> bool:
+        """默认是否开启视觉：只有 profile 里显式写了 mmproj_path 才算默认开启，
+        否则一律默认关闭（与"不打开就不加载"的预期一致）。"""
+        return bool(str(self.settings.get("mmproj_path") or "").strip())
 
     def describe_shape(self) -> str:
         if self.shape is None:
@@ -170,6 +183,9 @@ class ModelEntry:
             "estimate": est,
             "measured": measured,
             "settings": self.settings,
+            "vision_supported": self.vision_supported,
+            "vision_default": self.vision_default,
+            "mmproj": self.mmproj_path,
             "active": bool(active_path) and _norm_path(active_path) == _norm_path(self.path),
             "error": self.error,
         }
@@ -188,6 +204,31 @@ def _looks_like_projector(path: Path, meta: dict | None = None) -> bool:
         if f"{arch}.block_count" not in meta:
             return True
     return False
+
+
+def _attach_vision(entries: list[ModelEntry]) -> None:
+    """把视觉投影（mmproj）关联到模型条目上（原地修改）。
+
+    关联规则：
+      1. profile 的 ``settings.mmproj_path`` 显式指定了 → 用它（最高优先级）；
+      2. 否则用模型**同目录**下的投影器文件；有多个时取文件名序最小的，行为可预测。
+
+    没有关联到 mmproj 的模型 ``vision_supported`` 为假，前端就不显示视觉开关。
+    """
+    projectors_by_dir: dict[Path, list[Path]] = {}
+    for entry in entries:
+        if entry.is_projector:
+            projectors_by_dir.setdefault(entry.path.parent, []).append(entry.path)
+    for entry in entries:
+        if entry.is_projector:
+            continue
+        explicit = str(entry.settings.get("mmproj_path") or "").strip()
+        if explicit:
+            entry.mmproj_path = explicit
+            continue
+        candidates = projectors_by_dir.get(entry.path.parent) or []
+        if candidates:
+            entry.mmproj_path = str(sorted(candidates, key=lambda p: p.name.lower())[0])
 
 
 class ModelRegistry:
@@ -305,6 +346,8 @@ class ModelRegistry:
                     log.warning("解析 %s 失败: %s", path, exc)
             entry.profile = self.resolve_profile(path)
             entries.append(entry)
+
+        _attach_vision(entries)
 
         # 可按独立加载的模型排前面，再按体积降序
         entries.sort(key=lambda e: (e.is_projector, -e.size_gib))

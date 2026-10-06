@@ -100,17 +100,36 @@ class FakeServer:
 
 
 class FakeEntry:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, mmproj: str = "", default_vision: bool = False) -> None:
         self.path = path
         self.label = "model"
         self.is_projector = False
+        self.mmproj_path = mmproj
+        self._settings = {"mmproj_path": mmproj} if default_vision else {}
+
+    @property
+    def vision_supported(self):
+        return bool(self.mmproj_path)
+
+    @property
+    def vision_default(self):
+        return bool(str(self._settings.get("mmproj_path") or "").strip())
+
+    @property
+    def settings(self):
+        return dict(self._settings)
 
 
 class FakeRegistry:
     load_error = ""
 
+    def __init__(self, entries=None):
+        # path -> (mmproj, default_vision)
+        self.entries = entries or {}
+
     def find(self, path):
-        return FakeEntry(path)
+        mmproj, default = self.entries.get(str(path), ("", False))
+        return FakeEntry(path, mmproj=mmproj, default_vision=default)
 
     def apply_to_config(self, entry, cfg):
         cfg.model_path = str(entry.path)
@@ -120,10 +139,10 @@ class FakeRegistry:
         return []
 
 
-def _make(fail_start: bool = False):
+def _make(fail_start: bool = False, entries=None):
     cfg = ServerConfig()
     srv = FakeServer(fail_start=fail_start)
-    mgr = ModelManager(cfg, srv, registry=FakeRegistry())
+    mgr = ModelManager(cfg, srv, registry=FakeRegistry(entries))
     return mgr, srv
 
 
@@ -185,6 +204,61 @@ def main() -> int:
     check("失败后状态为 error", mgr.state, STATE_ERROR)
     check("active_path 为空（旧模型已停，不应仍是 active）", mgr.active_path, "")
     check("server.profile 为空", srv.profile, None)
+
+    print()
+    print("[5] 视觉开关：只对检测到 mmproj 的模型生效")
+    entries = {
+        r"D:\models\vision.gguf": (r"D:\models\mmproj-Q8_0.gguf", False),
+        r"D:\models\plain.gguf": ("", False),
+    }
+    mgr, srv = _make(entries=entries)
+    check("无视觉组件时开启被拒",
+          mgr.activate(r"D:\models\plain.gguf", vision=True).get("ok"), False)
+    check("有视觉组件时受理",
+          mgr.activate(r"D:\models\vision.gguf", vision=True).get("ok"), True)
+    _join(mgr)
+    check("配置里写入了 mmproj", mgr.cfg.mmproj_path, r"D:\models\mmproj-Q8_0.gguf")
+    check("状态为 running", mgr.state, STATE_RUNNING)
+
+    mgr.activate(r"D:\models\plain.gguf", vision=False)
+    _join(mgr)
+    check("切到无视觉模型后 mmproj 被清空（不残留旧眼睛）", mgr.cfg.mmproj_path, "")
+
+    mgr.activate(r"D:\models\vision.gguf", vision=False)
+    _join(mgr)
+    check("有视觉组件但显式关闭则不加载", mgr.cfg.mmproj_path, "")
+
+    print()
+    print("[6] 同目录 mmproj 关联（_attach_vision）")
+    from pathlib import Path as _P
+
+    from llm_server.models_registry import (  # noqa: PLC0415
+        ModelEntry,
+        ModelProfile,
+        _attach_vision,
+    )
+
+    def mk(name: str, proj: bool = False, settings=None):
+        e = ModelEntry(path=_P("D:/m") / name, name=name, stem=_P(name).stem,
+                       size_gib=1.0, is_projector=proj)
+        if settings is not None:
+            e.profile = ModelProfile(settings=settings)
+        return e
+
+    model, other, projector = mk("model.gguf"), mk("other.gguf"), mk("mmproj-Q8_0.gguf", proj=True)
+    _attach_vision([model, other, projector])
+    check("同目录投影器被关联", model.mmproj_path, "D:\\m\\mmproj-Q8_0.gguf")
+    check("model 标记为支持视觉", model.vision_supported, True)
+    check("没有指定时默认不开启视觉", model.vision_default, False)
+
+    pinned = mk("model2.gguf", settings={"mmproj_path": "D:/custom/eye.gguf"})
+    _attach_vision([pinned, projector])
+    check("profile 显式 mmproj 优先", pinned.mmproj_path, "D:/custom/eye.gguf")
+    check("显式指定即默认开启", pinned.vision_default, True)
+
+    lone = mk("lone.gguf")
+    _attach_vision([lone])
+    check("无投影器的模型不支持视觉", lone.vision_supported, False)
 
     print()
     print("=" * 60)
