@@ -89,6 +89,12 @@ def run_case(force_kill: bool) -> None:
     base = vram_used()
     print(f"  基线显存 {base:.2f} GiB")
 
+    # 记下开跑前**已经存在**的 llama-server。断言只针对本次新起的进程 ——
+    # 否则环境里任何一个无关残留都会让测试失败，而那是环境问题不是回归。
+    preexisting = set(llama_server_pids())
+    if preexisting:
+        print(f"  注意：已有 {sorted(preexisting)} 在运行，断言会排除它们")
+
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUNBUFFERED"] = "1"
@@ -115,8 +121,8 @@ def run_case(force_kill: bool) -> None:
             return
     check("helper 报告就绪", ready_line.startswith("READY"), ready_line)
 
-    pids = llama_server_pids()
-    check("llama-server 正在运行", len(pids) > 0, f"pid={pids}")
+    pids = sorted(set(llama_server_pids()) - preexisting)
+    check("llama-server 正在运行", len(pids) > 0, f"本次新起 pid={pids}")
     peak = vram_used()
     print(f"  峰值显存 {peak:.2f} GiB (增量 {peak - base:+.2f})")
 
@@ -136,7 +142,8 @@ def run_case(force_kill: bool) -> None:
     released = wait_vram(base, timeout=90)
 
     check("llama-server 已结束", gone >= 0,
-          f"{gone:.1f}s" if gone >= 0 else f"仍有残留 pid={llama_server_pids()}")
+          f"{gone:.1f}s" if gone >= 0
+          else f"仍有残留 pid={sorted(set(llama_server_pids()) & set(pids))}")
     check("显存已释放", released >= 0,
           f"{released:.1f}s, 当前 {vram_used():.2f} GiB" if released >= 0
           else f"当前 {vram_used():.2f} GiB（基线 {base:.2f}）")

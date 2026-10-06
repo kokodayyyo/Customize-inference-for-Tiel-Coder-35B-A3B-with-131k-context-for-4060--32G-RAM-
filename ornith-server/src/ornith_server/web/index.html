@@ -76,6 +76,31 @@
   .toast.show{display:block}
   details summary{cursor:pointer;color:var(--dim);font-size:12.5px;user-select:none}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+  /* ---------- 数据仪表盘 ---------- */
+  .dash{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+  .tile{background:var(--panel2);border:1px solid var(--line);border-radius:var(--radius);
+        padding:14px 15px}
+  .tile h4{margin:0 0 10px;font-size:12px;color:var(--dim);font-weight:600;
+           text-transform:uppercase;letter-spacing:.5px;display:flex;
+           align-items:center;justify-content:space-between}
+  .big{font-size:27px;font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums}
+  .big small{font-size:12.5px;color:var(--dim);font-weight:400;margin-left:4px}
+  .sub{font-size:12px;color:var(--dim);margin-top:4px}
+  .g{color:var(--accent)} .b{color:var(--accent2)} .w{color:var(--warn)} .e{color:var(--err)}
+  .meter{height:7px;border-radius:4px;background:#242c35;overflow:hidden;margin:9px 0 5px}
+  .meter>i{display:block;height:100%;border-radius:4px;background:var(--accent2);
+           transition:width .4s ease}
+  .meter>i.ok{background:var(--accent)} .meter>i.warn{background:var(--warn)}
+  .meter>i.hot{background:var(--err)}
+  .legend{display:flex;gap:12px;font-size:11.5px;color:var(--dim);margin-top:2px}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px}
+  .mini{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-size:12.5px}
+  .mini .k{color:var(--dim);white-space:nowrap}
+  .mini .v{font-variant-numeric:tabular-nums;text-align:right}
+  canvas{width:100%;height:96px;display:block}
+  .tile.wide{grid-column:1/-1}
+  .kvtag{font-size:11px;padding:1px 7px;border-radius:5px;background:#2b3542;color:var(--dim)}
 </style>
 </head>
 <body>
@@ -121,6 +146,13 @@
       <div class="muted" style="margin:10px 0 6px">日志尾部</div>
       <pre id="log">（点「刷新日志」）</pre>
     </details>
+  </div>
+
+  <div class="panel">
+    <h2>实时数据 <span class="muted" id="dash-updated"></span></h2>
+    <div class="dash" id="dash">
+      <div class="muted">等待第一个采样…（CPU 占用需要两次采样，约 2 秒后出现）</div>
+    </div>
   </div>
 
   <div class="panel">
@@ -186,6 +218,194 @@ async function fetchStatus(){
     STATUS = await r.json();
   }catch(e){ STATUS = {state:'error', message:'控制台连不上后端：'+e}; }
   renderStatus();
+}
+
+/* ================= 实时数据仪表盘 ================= */
+let LAST_METRICS = null;
+
+async function fetchMetrics(){
+  try{
+    const r = await api('/admin/metrics');
+    LAST_METRICS = await r.json();
+  }catch(e){ LAST_METRICS = null; }
+  renderDash(LAST_METRICS);
+}
+
+function n(v, d){ return (v===null||v===undefined||isNaN(v)) ? '—' : Number(v).toFixed(d===undefined?1:d); }
+function gi(v, d){ return (v===null||v===undefined) ? '—' : Number(v).toFixed(d===undefined?2:d) + ' GiB'; }
+function meterClass(p){ return p>=90?'hot':(p>=70?'warn':'ok'); }
+function meter(p, label){
+  const v = Math.max(0, Math.min(100, p||0));
+  return `<div class="meter"><i class="${meterClass(v)}" style="width:${v}%"></i></div>
+          <div class="sub">${label||''}</div>`;
+}
+function tile(title, body, tag){
+  return `<div class="tile"><h4>${title}${tag?`<span class="kvtag">${tag}</span>`:''}</h4>${body}</div>`;
+}
+
+function renderDash(m){
+  const box = $('dash');
+  if(!m){ box.innerHTML = '<div class="muted">拿不到运行时数据（后端可能正在加载）。</div>'; return; }
+  const sys = m.system||{}, be = m.backend||{}, gw = m.gateway||{};
+  const gpu = (sys.gpus||[])[0] || null;
+  const mem = sys.memory || {};
+  const proc = sys.process || {};
+  const live = be.live || {}, avg = be.avg || {};
+
+  $('dash-updated').textContent = '· ' + new Date((m.ts||0)*1000).toLocaleTimeString();
+
+  /* --- 1. 实时吞吐 --- */
+  const speedTile = `
+    <div style="display:flex;gap:24px;flex-wrap:wrap">
+      <div><div class="sub">decode</div>
+        <div class="big g">${n(live.decode_tps,2)}<small>tok/s</small></div></div>
+      <div><div class="sub">prefill</div>
+        <div class="big b">${n(live.prefill_tps,1)}<small>tok/s</small></div></div>
+    </div>
+    <canvas id="chart" width="600" height="96" style="margin-top:8px"></canvas>
+    <div class="legend">
+      <span><i style="background:var(--accent)"></i>decode</span>
+      <span><i style="background:var(--accent2)"></i>prefill（右轴同比例）</span>
+      <span style="margin-left:auto">累计均值 decode ${n(avg.decode_tps,2)} / prefill ${n(avg.prefill_tps,1)}</span>
+    </div>`;
+
+  /* --- 2. GPU --- */
+  const gpuTile = gpu ? `
+    <div class="big">${n(gpu.used_gib,2)}<small>/ ${n(gpu.total_gib,1)} GiB</small></div>
+    ${meter(gpu.used_percent, `显存占用 ${n(gpu.used_percent,1)}%　空闲 ${n(gpu.free_gib,2)} GiB`)}
+    <div class="mini" style="margin-top:8px">
+      <span class="k">GPU 利用率</span><span class="v">${n(gpu.util_percent,0)}%</span>
+      <span class="k">显存带宽占用</span><span class="v">${n(gpu.mem_util_percent,0)}%</span>
+      <span class="k">温度 / 功耗</span><span class="v">${n(gpu.temp_c,0)}°C / ${n(gpu.power_w,1)}W</span>
+    </div>` : '<div class="muted">没有检测到 NVIDIA 显卡</div>';
+
+  /* --- 3. CPU（本模型 prefill 的瓶颈所在）--- */
+  const cpuTile = `
+    <div class="big">${n(sys.cpu_percent,1)}<small>% 系统</small></div>
+    ${meter(sys.cpu_percent, `${sys.cpu_count||'?'} 个逻辑核心`)}
+    <div class="mini" style="margin-top:8px">
+      <span class="k">后端进程 CPU</span>
+      <span class="v ${(proc.cpu_percent||0)>200?'w':''}">${n(proc.cpu_percent,1)}%<span class="sub"> 单核口径</span></span>
+      <span class="k">占总算力</span><span class="v">${n(proc.cpu_percent_of_total,1)}%</span>
+      <span class="k">累计 CPU 时间</span><span class="v">${n(proc.cpu_seconds,0)} s</span>
+    </div>
+    <div class="sub" style="margin-top:6px">专家权重在内存里做 GEMM，prefill 主要吃 CPU</div>`;
+
+  /* --- 4. 内存（专家权重的家）--- */
+  const memTile = `
+    <div class="big">${n(mem.used_gib,1)}<small>/ ${n(mem.total_gib,1)} GiB</small></div>
+    ${meter(mem.percent, `已用 ${n(mem.percent,1)}%　可用 ${n(mem.avail_gib,1)} GiB`)}
+    <div class="mini" style="margin-top:8px">
+      <span class="k">后端进程工作集</span><span class="v">${gi(proc.working_set_gib)}</span>
+      <span class="k">工作集峰值</span><span class="v">${gi(proc.peak_working_set_gib)}</span>
+      <span class="k">提交量</span><span class="v">${gi(proc.commit_gib)}</span>
+      <span class="k">提交上限可用</span><span class="v">${gi(mem.commit_avail_gib,1)}</span>
+    </div>`;
+
+  /* --- 5. KV cache / 上下文（200K 的关键指标，从 /slots 推得）--- */
+  const kvp = (be.kv_cache_usage_ratio||0)*100;
+  const slot = (be.slots||[])[0] || {};
+  const kvTile = `
+    <div class="big">${n(kvp,2)}<small>% KV 占用</small></div>
+    ${meter(kvp, `${be.kv_cache_tokens!==null&&be.kv_cache_tokens!==undefined
+        ? Number(be.kv_cache_tokens).toLocaleString() : '—'} / ${be.context_total
+        ? Number(be.context_total).toLocaleString() : '—'} token`)}
+    <div class="mini" style="margin-top:8px">
+      <span class="k">上下文上限</span><span class="v">${be.context_total?(be.context_total/1024).toFixed(0)+'K':'—'}</span>
+      <span class="k">槽位状态</span><span class="v">#${slot.id??'—'} ${slot.state||'—'}</span>
+      <span class="k">槽内已解码</span><span class="v">${slot.n_decoded!==null&&slot.n_decoded!==undefined?Number(slot.n_decoded).toLocaleString():'—'}</span>
+      <span class="k">命中前缀缓存</span><span class="v">${be.prompt_tokens_cached_total!==null&&be.prompt_tokens_cached_total!==undefined?Number(be.prompt_tokens_cached_total).toLocaleString():'—'} token</span>
+      <span class="k">正在处理 / 排队</span>
+      <span class="v ${(be.requests_deferred||0)>0?'w':''}">${be.requests_processing??'—'} / ${be.requests_deferred??'—'}</span>
+      <span class="k">历史最大 token</span><span class="v">${be.n_tokens_max!==null&&be.n_tokens_max!==undefined?Number(be.n_tokens_max).toLocaleString():'—'}</span>
+    </div>`;
+
+  /* --- 6. 网关 --- */
+  const errRate = gw.requests_total ? ((gw.requests_failed||0)+(gw.requests_rejected||0))/gw.requests_total*100 : 0;
+  const gwTile = `
+    <div class="big">${gw.requests_total??'—'}<small>次请求</small></div>
+    <div class="mini" style="margin-top:8px">
+      <span class="k">活跃 / 排队</span><span class="v">${gw.requests_active??'—'} / ${gw.queue_waiting??'—'}</span>
+      <span class="k">失败 / 被拒</span>
+      <span class="v ${errRate>0?'e':''}">${gw.requests_failed??'—'} / ${gw.requests_rejected??'—'}（${n(errRate,1)}%）</span>
+      <span class="k">延迟 P50 / P95</span>
+      <span class="v">${n(gw.latency_p50_seconds,2)}s / ${n(gw.latency_p95_seconds,2)}s</span>
+      <span class="k">累计 in / out token</span>
+      <span class="v">${(gw.prompt_tokens_total||0).toLocaleString()} / ${(gw.completion_tokens_total||0).toLocaleString()}</span>
+      <span class="k">网关平均生成速率</span>
+      <span class="v">${n(gw.avg_completion_tokens_per_second,2)} tok/s</span>
+      <span class="k">网关运行时长</span><span class="v">${fmtUptime(gw.uptime_seconds)}</span>
+    </div>`;
+
+  /* --- 7. 累计与模型信息 --- */
+  const beTile = `
+    <div class="mini">
+      <span class="k">累计 prompt token</span><span class="v">${Number(be.prompt_tokens_total||0).toLocaleString()}</span>
+      <span class="k">累计生成 token</span><span class="v">${Number(be.predicted_tokens_total||0).toLocaleString()}</span>
+      <span class="k">累计 prefill 耗时</span><span class="v">${n(be.prompt_seconds_total,1)} s</span>
+      <span class="k">累计 decode 耗时</span><span class="v">${n(be.predicted_seconds_total,1)} s</span>
+      <span class="k">累计解码次数</span><span class="v">${be.n_decode_total!==null&&be.n_decode_total!==undefined?Number(be.n_decode_total).toLocaleString():'—'}</span>
+      <span class="k">量化类型</span><span class="v">${be.model_ftype??'—'}</span>
+      <span class="k">运行时</span><span class="v">${be.build_info||'—'}</span>
+      <span class="k">后端 PID</span><span class="v">${be.pid??'—'}</span>
+    </div>`;
+
+  box.innerHTML =
+      tile('实时吞吐', speedTile)
+    + tile('显卡', gpuTile, gpu?gpu.name.replace('NVIDIA GeForce ','').replace(' Laptop GPU',''):'')
+    + tile('CPU', cpuTile)
+    + tile('内存', memTile)
+    + tile('上下文 / KV cache', kvTile)
+    + tile('网关', gwTile)
+    + tile('累计与模型', beTile, be.state||'');
+
+  drawChart($('chart'), m.history||[]);
+}
+
+function drawChart(cv, hist){
+  if(!cv) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth || 600, h = 96;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,w,h);
+
+  // 网格
+  ctx.strokeStyle = '#2a333d'; ctx.lineWidth = 1;
+  for(let i=0;i<=3;i++){ const y = 4 + i*(h-12)/3;
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+
+  const series = [
+    {key:'decode_tps', color:'#3fb950'},
+    {key:'prefill_tps', color:'#2f81f7'},
+  ];
+  const all = [];
+  for(const s of series) for(const p of hist){ const v=p[s.key]; if(v!=null) all.push(v); }
+  if(!all.length){
+    ctx.fillStyle = '#8b98a5'; ctx.font = '12px sans-serif';
+    ctx.fillText('还没有请求经过 —— 发一次推理就能看到曲线', 8, h/2);
+    return;
+  }
+  const max = Math.max(...all) * 1.15 || 1;
+  const nPts = Math.max(hist.length, 2);
+  const x = i => (i/(nPts-1))*(w-2)+1;
+  const y = v => (h-8) - (v/max)*(h-16);
+
+  for(const s of series){
+    ctx.strokeStyle = s.color; ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    let started = false;
+    hist.forEach((p,i)=>{
+      const v = p[s.key];
+      if(v==null){ started = false; return; }
+      if(!started){ ctx.moveTo(x(i), y(v)); started = true; }
+      else ctx.lineTo(x(i), y(v));
+    });
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#8b98a5'; ctx.font = '10px sans-serif';
+  ctx.fillText('峰值 ' + max.toFixed(1) + ' tok/s', 6, 11);
 }
 async function fetchModels(){
   $('models').innerHTML = '<div class="muted">正在扫描模型目录…</div>';
@@ -315,7 +535,11 @@ $('btn-copy').onclick = () => {
 (async function init(){
   await fetchModels();
   await fetchStatus();
-  pollTimer = setInterval(fetchStatus, 2000);
+  await fetchMetrics();
+  pollTimer = setInterval(async () => {
+    await fetchStatus();
+    await fetchMetrics();
+  }, 2000);
 })();
 </script>
 </body>

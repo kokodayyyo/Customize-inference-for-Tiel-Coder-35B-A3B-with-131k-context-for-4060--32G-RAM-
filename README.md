@@ -155,6 +155,23 @@ D:\anaconda\envs\test1\python.exe scripts\client_example.py
   加载新的（约 10–15 秒，页面有进度条）
 * 顶部实时显示状态、上下文、KV 位置、显存空闲；还能看启动命令行和后端日志
 
+**「实时数据」仪表盘**（每 2 秒刷新，数据直接来自运行中的服务）：
+
+| 卡片 | 内容 |
+|---|---|
+| **实时吞吐** | decode / prefill 的**当前速度**（不是平均值）+ 历史曲线 |
+| **显卡** | 显存占用%、GPU 利用率、显存带宽占用、温度、功耗 |
+| **CPU** | 系统占用 + **后端进程占用**（单核口径）—— 本模型 prefill 吃 CPU，这栏最关键 |
+| **内存** | 系统占用 + 后端进程工作集/峰值/提交量 —— 专家权重住在这里 |
+| **上下文 / KV cache** | **KV 占用率**、已用 token / 上限、槽位状态、前缀缓存命中 |
+| **网关** | 请求数、活跃/排队、失败率、延迟 P50/P95、累计 in/out token |
+| **累计与模型** | 累计 token 与各阶段耗时、量化类型、运行时版本、后端 PID |
+
+> 实时速度取的是 llama.cpp 累计计数的**增量**，并用它自己统计的
+> `prompt_seconds_total` / `tokens_predicted_seconds_total` 做分母 ——
+> 那是各阶段的**纯计算耗时**，所以得到的是"真正在算的时候有多快"，
+> 不把空闲时间算进去。
+
 每个模型的调优参数写在 **`ornith-server/config/models.yaml`** 里，形如：
 
 ```yaml
@@ -614,7 +631,8 @@ local LLM/
 | `test_load_ladder.py` | 加载降级阶梯单测（18 项）|
 | `test_jobobject.py` | 显存不泄漏验证（8 项）|
 | `e2e_test.py` | 接口端到端（21 项）|
-| `final_acceptance.py` | 默认 128K 配置验收 |
+| `final_acceptance.py` | 默认配置验收 |
+| `test_ui.mjs` | **控制台页面集成自检**（Node 18+，21 项；`--offline` 可脱机跑）|
 
 **诊断 / 示例**
 
@@ -639,9 +657,17 @@ D:\anaconda\envs\test1\python.exe scripts\test_load_ladder.py
 D:\anaconda\envs\test1\python.exe main.py doctor
 D:\anaconda\envs\test1\python.exe scripts\e2e_test.py
 D:\anaconda\envs\test1\python.exe scripts\test_jobobject.py
-D:\anaconda\envs\test1\python.exe scripts\stress_ctx.py       REM 128K 上下文压力验证
 D:\anaconda\envs\test1\python.exe scripts\final_acceptance.py
+
+REM 以下两个需要服务正在运行
+node scripts\test_ui.mjs --offline              REM 控制台页面自检（脱机，21 项）
+node scripts\test_ui.mjs                        REM 用真实服务数据再跑一遍
+D:\anaconda\envs\test1\python.exe scripts\stress_ctx.py   REM 长上下文压力验证
 ```
+
+> `test_ui.mjs` 需要 **Node.js 18+**（只有这个测试用得到，服务本身不需要 Node）。
+> 它把页面里的脚本拿出来配一套最小 DOM 桩真跑一遍 —— 能抓住
+> `node --check` 漏掉的运行时错误（字段类型不对导致白屏那种）。
 
 ---
 

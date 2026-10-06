@@ -505,6 +505,67 @@ class LlamaBackendServer:
         """公开的日志尾部读取，供网关在转发失败时给出可诊断的错误。"""
         return self._log_tail(lines)
 
+    # ------------------------------------------------------------------
+    # 运行时指标（供网页控制台展示）
+    # ------------------------------------------------------------------
+    def fetch_backend_metrics(self, timeout: float = 5.0) -> dict[str, float]:
+        """读取 llama.cpp 自身的 ``/metrics``（Prometheus 文本）并解析成字典。
+
+        键名保留 ``llamacpp:`` 前缀之外的短名，例如 ``prompt_tokens_total``。
+        注意这些都是**累计值**，实时速度要在上层用两次采样做差。
+        """
+        if not self.is_running:
+            return {}
+        try:
+            resp = httpx.get(
+                f"{self.cfg.backend_base_url}/metrics",
+                timeout=timeout, trust_env=False,
+            )
+        except httpx.HTTPError:
+            return {}
+        if resp.status_code != 200:
+            return {}
+
+        out: dict[str, float] = {}
+        for line in resp.text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, _, value = line.partition(" ")
+            name = key.split(":")[-1].strip()
+            try:
+                out[name] = float(value.strip())
+            except ValueError:
+                continue
+        return out
+
+    def fetch_backend_props(self, timeout: float = 5.0) -> dict:
+        """读取 llama.cpp 的 ``/props``（模型路径、槽位、默认采样参数等）。"""
+        if not self.is_running:
+            return {}
+        try:
+            resp = httpx.get(
+                f"{self.cfg.backend_base_url}/props",
+                timeout=timeout, trust_env=False,
+            )
+            return resp.json() if resp.status_code == 200 else {}
+        except (httpx.HTTPError, ValueError):
+            return {}
+
+    def fetch_slots(self, timeout: float = 5.0) -> list[dict]:
+        """读取 ``/slots`` —— 每个槽的上下文占用与当前任务状态。"""
+        if not self.is_running:
+            return []
+        try:
+            resp = httpx.get(
+                f"{self.cfg.backend_base_url}/slots",
+                timeout=timeout, trust_env=False,
+            )
+            data = resp.json() if resp.status_code == 200 else []
+            return data if isinstance(data, list) else []
+        except (httpx.HTTPError, ValueError):
+            return []
+
 
 def _looks_like_oom(log_text: str) -> bool:
     lowered = log_text.lower()

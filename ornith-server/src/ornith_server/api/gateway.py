@@ -377,7 +377,7 @@ def create_app(cfg: ServerConfig, backend_server: LlamaBackendServer | None = No
     app.add_middleware(MetricsMiddleware, cfg=cfg)
 
     # 模型管理接口 + 网页控制台（/ui、/admin/*）
-    app.include_router(create_admin_router(manager))
+    app.include_router(create_admin_router(manager, state["proxy"]))
 
     proxy: BackendProxy = state["proxy"]
 

@@ -21,24 +21,38 @@ if not "%~1"=="" set "API_PORT=%~1"
 
 echo [1/2] Stopping gateway on port %API_PORT% ...
 set "FOUND="
+set "KILLFAIL="
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr /r /c:":%API_PORT% .*LISTENING"') do (
   if not "%%a"=="0" (
-    taskkill /F /PID %%a >nul 2>&1
-    if not errorlevel 1 (
+    set "FOUND=1"
+    taskkill /F /PID %%a
+    if errorlevel 1 (
+      set "KILLFAIL=1"
+    ) else (
       echo       killed gateway pid %%a
-      set "FOUND=1"
     )
   )
 )
 if not defined FOUND echo       no gateway listening on %API_PORT%
+if defined KILLFAIL echo       WARNING: could not kill the gateway. Run this script from an Administrator prompt.
 
 echo [2/2] Stopping llama-server ...
 tasklist /FI "IMAGENAME eq llama-server.exe" 2>nul | find /I "llama-server.exe" >nul
 if errorlevel 1 (
   echo       no llama-server process is running
 ) else (
-  taskkill /F /IM llama-server.exe >nul 2>&1
-  echo       llama-server stopped
+  REM Do NOT hide taskkill output: it fails with "Access denied" when the
+  REM process was started from another security context, and silently
+  REM printing "stopped" would be a lie.
+  taskkill /F /IM llama-server.exe
+  REM Verify instead of assuming.
+  tasklist /FI "IMAGENAME eq llama-server.exe" 2>nul | find /I "llama-server.exe" >nul
+  if errorlevel 1 (
+    echo       llama-server stopped
+  ) else (
+    echo       WARNING: some llama-server processes survived. Retry from an
+    echo                Administrator prompt, or use Task Manager.
+  )
 )
 
 echo.
