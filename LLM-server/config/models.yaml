@@ -43,16 +43,25 @@ profiles:
 
   # ----------------------------------------------------------
   # Tile-35B-A3B 基准版（IQ4_XS，16.9 GiB，带 MTP 头）
-  # 实测：decode 29.2 tok/s / prefill 1049 tok/s @ 128K，显存 4.4 GiB
+  #
+  # 完整标定（ctx=131072，真实中文提示，见 NOTES 第 4 章三轮扫描）：
+  #   decode  空载 28.3 → 填 95.8K 后 19.9 tok/s
+  #   prefill 928 ~ 1068 tok/s
+  #   显存净增 4.41 GiB（比 apex 少 0.7 GiB，因为 128K 的 KV 少 0.75 GiB）
+  #
+  # 量化 IQ3_S(8.59G)+IQ4_XS(4.91G)，比 apex 高，**回答质量更好**。
+  # 代价是文件大 3.1 GiB、decode 慢约 20%、上下文上限只有 128K。
   # ----------------------------------------------------------
   - match: "Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS"
     label: "Tile 35B-A3B 基准版"
-    note: "IQ4_XS / 16.9 GiB / 128K。质量更好，速度略低。含 0.36 GiB 被忽略的 MTP 头。"
+    note: "IQ4_XS / 16.9 GiB / 128K。质量更好，速度略低、上下文更短。含 0.36 GiB 被忽略的 MTP 头。"
     settings:
       model_alias: "tile-35b-a3b"
       context_size: 131072      # 128K：KV q8_0 需 1.33 GiB
       cpu_moe: true             # 专家 14.12 GiB 放内存
-      n_cpu_moe: -1             # 想再快 6% 可设 36（须保持 ubatch 2048）
+      # 128K 下显存余量比 apex 大，n_cpu_moe=36 实测 decode +6%（29.19→30.93）
+      # 且总占用只到 6768 MiB，安全。**42 以上或 32 会崩**，别越界。
+      n_cpu_moe: -1             # 想再快 6% 可设 36（必须同时保持 ubatch 2048）
       ubatch_size: 2048
       batch_size: 8192
       kv_cache_type_k: "q8_0"
@@ -62,20 +71,43 @@ profiles:
       threads: 16
       gpu_layers: 99
       # mmproj_path: "D:/models/Tile/Tile-35BA3B/mmproj-BF16.gguf"
+    # **实测**值（有别于上面的理论估算）。界面会优先显示这些。
+    # 原因：理论公式在基准版上分毫不差，在 apex 上却偏低 0.76 GiB，不能当依据。
+    measured:
+      vram_gib: 4.41            # 净增（moe_sweep u2048）
+      ram_working_set_gib: 15.6
+      decode_tps: 29.2          # 空载
+      prefill_tps: 1049
+      decode_at_95k: 19.9       # 填充 9.6 万 token 后
 
   # ----------------------------------------------------------
   # Tile-35B-A3B APEX（13.7 GiB，无 MTP 头，40 层）
-  # 实测：decode 38.1 tok/s / prefill 1153 tok/s @ 200K，显存 5.0 GiB
-  # 体积小 19%、速度快 30%，代价是量化更低（Q3_K / IQ3_XXS）
+  #
+  # 完整标定（ctx=204800，真实中文提示，见 NOTES 4.8）：
+  #   decode  空载 30.5 → 填 153K 后 17.7 tok/s（只掉 42%）
+  #   prefill 845 ~ 1137 tok/s
+  #   显存净增 5.14 GiB，长上下文填充期间保持平坦（6606 → 6990 MiB）
+  #
+  # 与基准版的关键差别**只有量化**：模板、层数、注意力结构、rope 参数
+  # 全部逐项比对过，完全一致。apex 用 Q3_K(6.75G)+IQ3_XXS(5.74G)，
+  # 基准版用 IQ3_S(8.59G)+IQ4_XS(4.91G)，所以**回答质量确实更低**——
+  # 这是文件本身的性质，不是参数没调好。
   # ----------------------------------------------------------
   - match: "Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1"
     label: "Tile 35B-A3B APEX"
-    note: "Q3_K+IQ3_XXS / 13.7 GiB / 200K。更快更省，质量低于基准版。"
+    note: "Q3_K+IQ3_XXS / 13.7 GiB / 200K。更快更省，但量化更低、回答质量不如基准版。"
     settings:
       model_alias: "tile-35b-a3b-apex"
       context_size: 204800      # 200K：KV q8_0 仅 2.03 GiB（10 个全注意力层）
       cpu_moe: true             # 专家 12.19 GiB 放内存
-      n_cpu_moe: -1             # 显存还有约 1.4 GiB 余量，可试 36（+6%）
+      # 实测 n_cpu_moe=36 只 +3.4% decode（基准版是 +6%），却把显存推到 7531 MiB
+      # ——离 7894 MiB 的崩盘线只剩 363 MiB。apex 上**不值得**，保持 -1。
+      # 基准版因为余量更大（显存只到 6768 MiB）才建议开。
+      n_cpu_moe: -1
+      # ubatch 的坑在 apex 上更明显：合成 8K 英文提示下 4096 看着快 15%，
+      # 换成真实中文长提示后 prefill 只有 505~825 tok/s（2048 是 890~1137），
+      # 慢 40%，且显存冲到 7582~7784 MiB（只剩 376 MiB）。
+      # 4096 从来不是更快，只是挑提示。**固定用 2048。**
       ubatch_size: 2048
       batch_size: 8192
       kv_cache_type_k: "q8_0"
@@ -85,3 +117,13 @@ profiles:
       threads: 16
       gpu_layers: 99
       # mmproj_path: "D:/models/Tile/Tile-35BA3B apex/mmproj-Q8_0.gguf"
+    # **实测**值。理论公式在这里偏低 0.76 GiB，所以界面显示实测值。
+    # 数据来源：scripts/stress_ctx.py + scripts/moe_sweep.py
+    measured:
+      vram_gib: 5.02            # 净增 @200K（公式只算 4.27，偏低 0.75）
+      vram_gib_128k: 3.85       # 净增 @128K（公式算 3.57，偏低 0.28）
+      ram_working_set_gib: 14.2
+      decode_tps: 30.5          # 空载
+      prefill_tps: 1137
+      decode_at_153k: 17.7      # 填充 15.3 万 token 后
+      first_token_at_153k_s: 181

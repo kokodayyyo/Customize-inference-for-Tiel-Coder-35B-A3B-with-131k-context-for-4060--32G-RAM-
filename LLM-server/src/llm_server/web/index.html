@@ -479,9 +479,11 @@ function renderModels(){
         <span class="k">结构</span><span>${m.shape||'—'}</span>
         <span class="k">上下文</span><span>${est.context?(est.context/1024).toFixed(0)+'K':'—'}
           ${m.context_max?`<span class="muted">（训练 ${(m.context_max/1024).toFixed(0)}K）</span>`:''}</span>
-        <span class="k">预计显存</span><span>${est.vram_total_gib!==undefined?est.vram_total_gib.toFixed(2)+' GiB':'—'}
+        <span class="k">显存占用</span><span>${est.vram_total_gib!==undefined?est.vram_total_gib.toFixed(2)+' GiB':'—'}
+          ${est.measured?'<span class="tag ok">实测</span>':'<span class="tag warn">估算</span>'}
           ${est.kv_gib!==undefined?`<span class="muted">（KV ${est.kv_gib.toFixed(2)}）</span>`:''}</span>
-        <span class="k">预计内存</span><span>${est.experts_ram_gib!==undefined?est.experts_ram_gib.toFixed(2)+' GiB':'—'}</span>
+        <span class="k">内存占用</span><span>${est.experts_ram_gib!==undefined?est.experts_ram_gib.toFixed(2)+' GiB':'—'}</span>
+        ${m.measured && m.measured.decode_tps ? `<span class="k">实测速度</span><span>decode ${m.measured.decode_tps} · prefill ${m.measured.prefill_tps||'—'} tok/s</span>` : ''}
         <span class="k">模型名</span><span>${m.alias}</span>
       </div>
       <div class="actions">

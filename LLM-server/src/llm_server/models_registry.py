@@ -43,6 +43,9 @@ class ModelProfile:
     path: str = ""
     match: str = ""
     settings: dict[str, Any] = field(default_factory=dict)
+    # **实测**占用与性能。理论估算在某些模型上会偏（实测 apex@200K 比公式
+    # 多占 0.76 GiB），所以有实测值时界面优先显示它。
+    measured: dict[str, Any] = field(default_factory=dict)
 
     def matches(self, model_path: Path, stem: str) -> bool:
         if self.path:
@@ -103,7 +106,12 @@ class ModelEntry:
         return " · ".join(bits)
 
     def estimate(self, context: int | None = None, kv_quant: str = "q8_0") -> dict[str, float]:
-        """按 profile 的上下文估算显存/内存占用（GiB）。"""
+        """按 profile 的上下文估算显存/内存占用（GiB）。
+
+        这是**理论估算**：resident + KV + 计算缓冲。实测在基准版上分毫不差，
+        但在 apex@200K 上偏低 0.76 GiB（原因未查明，疑与该 GGUF 的张量摆放或
+        llama.cpp 的额外缓冲有关）。所以界面优先显示 profile 里的 `measured`。
+        """
         if self.shape is None or self.breakdown is None:
             return {}
         settings = self.settings
@@ -136,6 +144,14 @@ class ModelEntry:
 
     def to_dict(self, active_path: str = "", context: int | None = None) -> dict[str, Any]:
         est = self.estimate(context)
+        measured = dict(self.profile.measured) if self.profile else {}
+        # 有实测值时，用实测的显存/内存覆盖理论估算，并标记来源
+        if measured:
+            if "vram_gib" in measured:
+                est["vram_total_gib"] = measured["vram_gib"]
+            if "ram_gib" in measured:
+                est["experts_ram_gib"] = measured["ram_gib"]
+            est["measured"] = True
         return {
             "path": str(self.path),
             "name": self.name,
@@ -152,6 +168,7 @@ class ModelEntry:
             "context_max": self.shape.context_length if self.shape else 0,
             "models_paths": str(self.path),
             "estimate": est,
+            "measured": measured,
             "settings": self.settings,
             "active": bool(active_path) and _norm_path(active_path) == _norm_path(self.path),
             "error": self.error,
@@ -220,6 +237,7 @@ class ModelRegistry:
                     path=str(raw.get("path", "")),
                     match=str(raw.get("match", "")),
                     settings=dict(raw.get("settings") or {}),
+                    measured=dict(raw.get("measured") or {}),
                 )
             )
         log.info(
