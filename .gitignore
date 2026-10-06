@@ -48,3 +48,4 @@ pip-unpack-*/
 .DS_Store
 Thumbs.db
 desktop.ini
+ui.txt
