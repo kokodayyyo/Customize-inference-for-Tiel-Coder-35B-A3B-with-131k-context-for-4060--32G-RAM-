@@ -1,18 +1,24 @@
 @echo off
 REM ============================================================
-REM  Tile-35B-A3B  local inference API  --  one-click launcher
+REM  Local inference service  --  console-only launcher
+REM
+REM  This starts ONLY the gateway + web console. No model is
+REM  loaded, so it comes up in about a second. Pick a model in
+REM  the console and it will be loaded then.
+REM
+REM      console : http://127.0.0.1:8000/ui
+REM
+REM  Passing --model/--ngl/... here does NOT load anything; to
+REM  preload a model as well, use:  main.py serve
 REM
 REM  IMPORTANT: keep this file pure ASCII.
 REM  cmd.exe parses .bat files using the system ANSI codepage (GBK
 REM  on Chinese Windows). Non-ASCII bytes here get mis-decoded and
 REM  break the script. All Chinese messages are printed by main.py.
 REM
-REM  Placement: MoE experts (14.12 GiB) in RAM,
-REM             attention + 128K KV cache (1.33 GiB) in VRAM.
-REM  Measured : decode ~28 tok/s, prefill ~1000 tok/s.
-REM
 REM  Usage    : start_server.bat [--api-key sk-xxx] [--port 8000]
-REM  Health   : main.py doctor      (GPU / runtime / VRAM budget)
+REM  Stop     : stop_server.bat   (stops console + any model)
+REM  Health   : doctor.bat        (GPU / runtime / VRAM budget)
 REM  Runtime  : bundled in runtime\llama.cpp\backends\  (no LM Studio needed)
 REM ============================================================
 setlocal
@@ -32,10 +38,11 @@ if not exist "%LLM_PYTHON%" (
 )
 
 echo.
-echo   Loading model, please wait about 15 seconds ...
+echo   Starting console (no model loaded) ...
 echo.
 
-"%LLM_PYTHON%" main.py serve %*
+REM --no-autostart is the whole point: gateway + console only.
+"%LLM_PYTHON%" main.py serve --no-autostart %*
 set "RC=%ERRORLEVEL%"
 
 if not "%RC%"=="0" (

@@ -487,11 +487,11 @@ def _print_banner(cfg: ServerConfig, backend: LlamaBackendServer | None, ready: 
     lines: list[str] = []
     line = "=" * 68
     lines.append(line)
-    lines.append("  本地推理内网 API 已启动")
+    lines.append("  本地推理服务已启动")
     lines.append(line)
-    lines.append(f"  模型      : {cfg.model_alias}")
-    lines.append(f"  权重文件  : {cfg.model_file}")
     if backend and backend.profile:
+        lines.append(f"  模型      : {cfg.model_alias}")
+        lines.append(f"  权重文件  : {cfg.model_file}")
         p = backend.profile
         lines.append(f"  上下文    : {p.context_size} total / {cfg.ctx_per_slot} per slot"
                      f"  (parallel={cfg.parallel_slots})")
@@ -500,8 +500,14 @@ def _print_banner(cfg: ServerConfig, backend: LlamaBackendServer | None, ready: 
                      f"  ngl={p.gpu_layers}")
         lines.append(f"  专家权重  : {p.moe_location}")
         lines.append(f"  加载说明  : {p.note}")
-    lines.append(f"  后端状态  : {'运行中' if ready else '未就绪'}")
-    lines.append(f"  **控制台** : http://127.0.0.1:{cfg.proxy_port}/ui   ← 换模型 / 看状态")
+        lines.append("  后端状态  : 运行中")
+    else:
+        # --no-autostart：只起了控制台，一个模型都没加载
+        lines.append("  模型      : （尚未加载，请在控制台里选一个）")
+        lines.append("  后端状态  : 未加载")
+    lines.append(f"  **控制台** : http://127.0.0.1:{cfg.proxy_port}/ui   ← 选模型 / 换模型 / 看数据")
+    if not ready:
+        lines.append("              ↑ 打开它，点「启动此模型」即可加载")
     lines.append(f"  本机访问  : http://127.0.0.1:{cfg.proxy_port}/v1")
     for ip in local_ip_addresses():
         lines.append(f"  内网访问  : http://{ip}:{cfg.proxy_port}/v1")
@@ -523,10 +529,16 @@ def _print_banner(cfg: ServerConfig, backend: LlamaBackendServer | None, ready: 
         except (AttributeError, OSError, ValueError):
             print(text.encode("ascii", errors="replace").decode("ascii"))
     finally:
-        log.info(
-            "服务已启动：模型=%s 上下文=%s KV=%s/%s 监听=%s:%s 鉴权=%s",
-            cfg.model_alias, cfg.context_size,
-            backend.profile.kv_type if backend and backend.profile else cfg.kv_cache_type_k,
-            backend.profile.kv_location if backend and backend.profile else "?",
-            cfg.proxy_host, cfg.proxy_port, bool(cfg.api_key),
-        )
+        if ready and backend and backend.profile:
+            log.info(
+                "服务已启动：模型=%s 上下文=%s KV=%s/%s 监听=%s:%s 鉴权=%s",
+                cfg.model_alias, backend.profile.context_size,
+                backend.profile.kv_type, backend.profile.kv_location,
+                cfg.proxy_host, cfg.proxy_port, bool(cfg.api_key),
+            )
+        else:
+            # --no-autostart：只起了控制台，别把配置里的模型名当成"在跑"
+            log.info(
+                "控制台已启动（未加载模型，请在 /ui 里选）：监听=%s:%s 鉴权=%s",
+                cfg.proxy_host, cfg.proxy_port, bool(cfg.api_key),
+            )

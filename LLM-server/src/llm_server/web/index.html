@@ -136,6 +136,11 @@
     <div id="errbox" style="display:none;margin-top:12px">
       <div class="muted" style="color:var(--err)" id="errmsg"></div>
     </div>
+    <div id="idlebox" style="display:none;margin-top:12px">
+      <div class="muted" style="color:var(--warn)">
+        当前没有加载任何模型。在下面的「可用模型」里选一个，点<b>「启动此模型」</b>即可。
+      </div>
+    </div>
     <details style="margin-top:12px">
       <summary>启动命令行 / 后端日志</summary>
       <div class="row" style="margin:10px 0">
@@ -208,7 +213,7 @@ function fmtUptime(s){
 }
 function stateBadge(st){
   const map = {running:['运行中','s-running'], loading:['加载中','s-loading'],
-               error:['出错','s-error'], idle:['已停止','s-idle']};
+               error:['出错','s-error'], idle:['未加载模型','s-idle']};
   const [text,cls] = map[st] || ['未知','s-idle'];
   const b = $('badge'); b.textContent = text; b.className = 'badge ' + cls;
 }
@@ -445,6 +450,7 @@ function renderStatus(){
   if(busy) $('progress-msg').textContent = STATUS.message || '正在加载…';
   $('errbox').style.display = (!busy && STATUS.state==='error') ? 'block' : 'none';
   if(STATUS.state==='error') $('errmsg').textContent = STATUS.message || '加载失败';
+  $('idlebox').style.display = (STATUS.state==='idle') ? 'block' : 'none';
 
   document.querySelectorAll('button[data-act="start"]').forEach(b=>{
     b.disabled = busy || b.dataset.path === STATUS.active_path;

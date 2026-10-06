@@ -156,6 +156,16 @@ def main() -> int:
     cfg, _ = load_cfg(["serve", "--no-cpu-moe"])
     check("moe_placement（全显存）", cfg.moe_placement, "专家权重不动（跟随 --n-gpu-layers，显存优先）")
 
+    print("\n[11] 只起控制台（--no-autostart，start_server.bat 用的就是这个）")
+    cfg, _ = load_cfg(["serve"])
+    check("默认自动加载模型", cfg.autostart_backend, True)
+    cfg, _ = load_cfg(["serve", "--no-autostart"])
+    check("--no-autostart 关闭自动加载", cfg.autostart_backend, False)
+    cfg, _ = load_cfg(["--no-autostart", "serve"])
+    check("写在子命令前也生效", cfg.autostart_backend, False)
+    cfg, _ = load_cfg(["serve", "--autostart"])
+    check("--autostart 显式开启", cfg.autostart_backend, True)
+
     print("\n" + "=" * 60)
     print(f"通过 {PASSED} 项，失败 {len(FAILED)} 项")
     for name in FAILED:

@@ -60,7 +60,10 @@ class ModelManager:
         self.registry = registry or ModelRegistry()
         self.state = STATE_IDLE
         self.message = ""
-        self.active_path = str(cfg.model_path) if cfg.model_path else ""
+        # 只有后端**真的起来了**才算"当前模型"。配置里写了 model_path 不代表
+        # 它在跑 —— 用 --no-autostart 启动时一个模型都没加载，这里要是预先
+        # 填上，界面会把一个没运行的模型标成"使用中"。
+        self.active_path = ""
         self.started_at = 0.0
         self.load_seconds = 0.0
         self.changed_fields: list[str] = []

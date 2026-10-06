@@ -86,6 +86,9 @@ def _load_config(args: argparse.Namespace) -> ServerConfig:
     if getattr(args, "load_mode", None):
         # --load-mode 取代了旧的 --no-mmap / --mlock
         cfg.load_mode = args.load_mode
+    if getattr(args, "autostart", None) is not None:
+        # --no-autostart：只起服务与控制台，模型留到网页里手动选
+        cfg.autostart_backend = args.autostart
     if getattr(args, "api_key", None) is not None:
         cfg.api_key = args.api_key
     if getattr(args, "port", None) is not None:
@@ -536,6 +539,11 @@ def _add_common_options(parser: argparse.ArgumentParser, *, suppress: bool = Fal
         choices=["auto", "mmap", "mlock", "mmap+mlock", "none"],
         help="模型加载模式。none 更快但需要一次性锁定约 14.6 GiB 锁页内存，"
              "失败时程序会自动回落到 mmap")
+    opt("--autostart", dest="autostart", action="store_true", default=d,
+        help="启动服务时立即加载配置里的模型（默认行为）")
+    opt("--no-autostart", dest="autostart", action="store_false",
+        help="**只起服务和控制台，不加载模型**；模型在网页控制台里手动选。"
+             "启动只需 1 秒，换模型也不用重启服务")
 
 
 def build_parser() -> argparse.ArgumentParser:
