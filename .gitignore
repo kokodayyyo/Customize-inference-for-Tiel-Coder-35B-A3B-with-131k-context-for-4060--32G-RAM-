@@ -14,6 +14,8 @@ LLM-server/runtime/
 # ============================================================
 *.log
 LLM-server/runtime/logs/
+# 控制台里增删的扫描目录（机器相关，不入库；models.yaml 里的 search_roots 是默认值）
+LLM-server/config/model_roots.json
 
 # ============================================================
 #  Python

@@ -261,6 +261,33 @@ def main() -> int:
     check("无投影器的模型不支持视觉", lone.vision_supported, False)
 
     print()
+    print("[7] 扫描目录的增删与持久化")
+    import tempfile
+
+    from llm_server.models_registry import ModelRegistry  # noqa: PLC0415
+
+    tmp = _P(tempfile.mkdtemp())
+    (tmp / "reg.yaml").write_text("search_roots:\n  - C:/default\n", encoding="utf-8")
+    (tmp / "rootA").mkdir()
+    reg = ModelRegistry(tmp / "reg.yaml")
+    check("初始 roots 来自 models.yaml", [p.name for p in reg.search_roots], ["default"])
+
+    ok_add, _ = reg.add_root(tmp / "rootA")
+    check("添加目录成功", ok_add, True)
+    ok_dup, _ = reg.add_root(tmp / "rootA")
+    check("重复添加被拒", ok_dup, False)
+    ok_bad, _why = reg.add_root(tmp / "does-not-exist")
+    check("不存在的目录被拒", ok_bad, False)
+    check("持久化文件已写出", reg.roots_state_file.is_file(), True)
+
+    reg2 = ModelRegistry(tmp / "reg.yaml")
+    check("重启后仍保留添加的目录", "rootA" in [p.name for p in reg2.search_roots], True)
+
+    reg.remove_root(tmp / "rootA")
+    reg3 = ModelRegistry(tmp / "reg.yaml")
+    check("移除后重启不恢复", "rootA" not in [p.name for p in reg3.search_roots], True)
+
+    print()
     print("=" * 60)
     print(f"通过 {PASSED} 项，失败 {len(FAILED)} 项")
     for name in FAILED:

@@ -440,6 +440,77 @@ def create_admin_router(manager: ModelManager, proxy: Any = None) -> APIRouter:
         return {"log_path": manager.status().get("log_path", ""),
                 "tail": manager.log_tail(max(1, min(lines, 400)))}
 
+    # ---- 扫描目录：前端可增删（持久化到 config/model_roots.json）----
+    @router.get("/admin/roots")
+    def list_roots() -> dict[str, Any]:
+        reg = manager.registry
+        return {
+            "roots": [str(p) for p in reg.search_roots],
+            "defaults": [str(p) for p in reg.default_roots],
+            "state_file": str(reg.roots_state_file),
+            "error": reg.roots_error or reg.load_error,
+        }
+
+    @router.post("/admin/roots")
+    async def update_roots(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except ValueError:
+            return JSONResponse({"ok": False, "error": "请求体必须是 JSON"}, status_code=400)
+        body = body or {}
+        action = str(body.get("action") or "add")
+        reg = manager.registry
+        if action == "remove":
+            path = str(body.get("path") or "").strip()
+            if not path:
+                return JSONResponse({"ok": False, "error": "缺少 path"}, status_code=400)
+            if not reg.remove_root(path):
+                return JSONResponse({"ok": False, "error": "该目录不在列表中"}, status_code=404)
+        elif action == "set":
+            reg.set_roots([str(p) for p in (body.get("roots") or [])])
+        else:  # add
+            ok, why = reg.add_root(str(body.get("path") or ""))
+            if not ok:
+                return JSONResponse({"ok": False, "error": why}, status_code=400)
+        return JSONResponse({
+            "ok": True, "roots": [str(p) for p in reg.search_roots], "error": reg.roots_error,
+        })
+
+    @router.get("/admin/browse")
+    def browse(path: str = "") -> dict[str, Any]:
+        """列出某目录下的子目录，供前端「选择文件夹」。空路径 → 列出盘符。
+
+        注意：它只是目录枚举（不读文件内容），但会暴露服务器的目录结构，
+        所以和 /admin/* 一样受 api_key 保护；内网开放（api_key 为空）时请自行
+        评估信任边界。
+        """
+        raw = (path or "").strip().strip('"')
+        if not raw:
+            drives = [f"{c}:\\" for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                      if Path(f"{c}:\\").exists()]
+            return {"path": "", "parent": "", "drives": drives, "dirs": [], "error": ""}
+        p = Path(raw).expanduser()
+        if not p.is_dir():
+            return {"path": str(p), "parent": "", "drives": [], "dirs": [],
+                    "error": f"目录不存在或不是文件夹: {p}"}
+        dirs: list[dict[str, Any]] = []
+        try:
+            for child in sorted(p.iterdir(), key=lambda x: x.name.lower()):
+                if not child.is_dir():
+                    continue
+                try:
+                    has_gguf = any(
+                        f.suffix.lower() == ".gguf" for f in child.iterdir() if f.is_file()
+                    )
+                except OSError:
+                    has_gguf = False
+                dirs.append({"name": child.name, "path": str(child), "has_gguf": has_gguf})
+        except OSError as exc:
+            return {"path": str(p), "parent": str(p.parent), "drives": [], "dirs": [],
+                    "error": f"无法读取目录: {exc}"}
+        parent = str(p.parent) if p.parent != p else ""
+        return {"path": str(p), "parent": parent, "drives": [], "dirs": dirs, "error": ""}
+
     @router.post("/admin/activate")
     async def activate(request: Request) -> JSONResponse:
         try:

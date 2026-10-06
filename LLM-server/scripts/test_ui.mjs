@@ -330,6 +330,11 @@ if (!runError) {
           (visionCard?._html || "").includes("mmproj-Q8_0.gguf"), "");
     check("无视觉组件 → 不显示视觉开关",
           !(plainCard?._html || "").includes("data-vision"), "");
+
+    // 扫描目录栏
+    const rootsBar = elements.get("roots-bar")?.innerHTML || "";
+    check("扫描目录栏显示当前目录", rootsBar.includes("D:/models"), rootsBar);
+    check("扫描目录栏有添加按钮", rootsBar.includes("btn-add-root"), "");
   }
 }
 

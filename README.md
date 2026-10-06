@@ -157,6 +157,10 @@ start_server.bat --autostart --model "D:\path\to\model.gguf"
 浏览器访问 **`http://127.0.0.1:8000/ui`**：
 
 * 自动扫描 `config/models.yaml` 里 `search_roots` 指定的目录（默认 `D:/models`）
+* **模型目录可以在页面上自己加/删**：目录栏每个目录是一个可移除的标签，
+  点「＋ 添加目录」打开目录选择器（可逐级浏览盘符/子目录，含模型的目录会标
+  「含模型」，也可直接粘贴路径）。改动会持久化到 `config/model_roots.json`
+  —— 存在时它覆盖 `models.yaml` 的 `search_roots`，所以不会动到 yaml 里的注释。
 * 每个模型显示体积、结构、**显存/内存占用**（有实测值就标「实测」，否则标「估算」）、
   以及是否已标定
 * **点「启动此模型」即可** —— 套用该模型预先调好的参数并加载
@@ -646,11 +650,11 @@ local LLM/
 | `check_syntax.py` | 语法自检 |
 | `test_cli.py` | 命令行参数解析单测（43 项）|
 | `test_load_ladder.py` | 加载降级阶梯单测（18 项）|
-| `test_admin_state.py` | 模型停止/切换/视觉开关状态机单测（27 项；不加载模型）|
+| `test_admin_state.py` | 模型停止/切换/视觉开关/扫描目录状态机单测（34 项；不加载模型）|
 | `test_jobobject.py` | 显存不泄漏验证（8 项）|
 | `e2e_test.py` | 接口端到端（21 项）|
 | `final_acceptance.py` | 默认配置验收 |
-| `test_ui.mjs` | **控制台页面集成自检**（Node 18+，28 项；`--offline` 可脱机跑）|
+| `test_ui.mjs` | **控制台页面集成自检**（Node 18+，30 项；`--offline` 可脱机跑）|
 
 **诊断 / 示例**
 

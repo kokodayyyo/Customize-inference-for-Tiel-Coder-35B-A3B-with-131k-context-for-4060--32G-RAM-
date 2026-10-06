@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -236,11 +237,17 @@ class ModelRegistry:
 
     def __init__(self, registry_file: str | os.PathLike[str] | None = None) -> None:
         self.file = Path(registry_file) if registry_file else DEFAULT_REGISTRY_FILE
+        # 用户在前端增删的扫描目录存在这个文件里（和 models.yaml 同目录），
+        # 存在时覆盖 models.yaml 的 search_roots —— 这样既保留了 yaml 里的大量
+        # 注释，又让界面上的改动能持久化。
+        self.roots_state_file = self.file.with_name("model_roots.json")
         self.search_roots: list[Path] = []
+        self.default_roots: list[Path] = []  # models.yaml 里的初始值
         self.ignore_dirs: list[str] = []
         self.profiles: list[ModelProfile] = []
         self.default_profile = ModelProfile(label="未标定模型", note="使用保守默认值")
         self.load_error = ""
+        self.roots_error = ""  # 持久化失败时记录原因
         self._load()
 
     # ------------------------------------------------------------------
@@ -258,7 +265,9 @@ class ModelRegistry:
             log.error(self.load_error)
             return
 
-        self.search_roots = [Path(p) for p in data.get("search_roots", []) if p]
+        self.default_roots = [Path(p) for p in data.get("search_roots", []) if p]
+        override = self._load_roots_override()
+        self.search_roots = override if override is not None else list(self.default_roots)
         self.ignore_dirs = [str(s) for s in data.get("ignore_dirs", [])]
 
         default = data.get("default_profile") or {}
@@ -285,6 +294,73 @@ class ModelRegistry:
             "模型注册表已加载：%d 个 profile，%d 个扫描目录",
             len(self.profiles), len(self.search_roots),
         )
+
+    # ------------------------------------------------------------------
+    # 扫描目录（可从前端增删）
+    # ------------------------------------------------------------------
+    def _load_roots_override(self) -> list[Path] | None:
+        """读取用户覆盖的扫描目录；没有覆盖文件时返回 None（用 models.yaml 的值）。"""
+        f = self.roots_state_file
+        if not f.is_file():
+            return None
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            return [Path(p) for p in (data.get("search_roots") or []) if p]
+        except (OSError, ValueError) as exc:
+            self.roots_error = f"读取 {f.name} 失败: {exc}"
+            return None
+
+    def _persist_roots(self) -> None:
+        f = self.roots_state_file
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            payload = {"search_roots": [str(p) for p in self.search_roots]}
+            f.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.roots_error = ""
+        except OSError as exc:
+            self.roots_error = f"保存扫描目录失败: {exc}"
+            log.error(self.roots_error)
+
+    def add_root(self, path: str | os.PathLike[str]) -> tuple[bool, str]:
+        """添加一个扫描目录。返回 (是否成功, 失败原因)。"""
+        cleaned = str(path or "").strip().strip('"')
+        if not cleaned:
+            return False, "路径为空"
+        p = Path(cleaned).expanduser()
+        if not p.is_dir():
+            return False, f"目录不存在或不是文件夹: {p}"
+        key = _norm_path(p)
+        if any(_norm_path(r) == key for r in self.search_roots):
+            return False, "该目录已在列表中"
+        self.search_roots.append(p)
+        self._persist_roots()
+        return True, ""
+
+    def remove_root(self, path: str | os.PathLike[str]) -> bool:
+        """移除一个扫描目录。返回是否真的移除了。"""
+        key = _norm_path(path)
+        before = len(self.search_roots)
+        self.search_roots = [r for r in self.search_roots if _norm_path(r) != key]
+        if len(self.search_roots) == before:
+            return False
+        self._persist_roots()
+        return True
+
+    def set_roots(self, roots: list[str]) -> None:
+        """整体替换扫描目录（会校验每个路径存在）。"""
+        cleaned: list[Path] = []
+        seen: set[str] = set()
+        for raw in roots or []:
+            p = Path(str(raw)).expanduser()
+            if not p.is_dir():
+                continue
+            key = _norm_path(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(p)
+        self.search_roots = cleaned
+        self._persist_roots()
 
     # ------------------------------------------------------------------
     def resolve_profile(self, model_path: Path) -> ModelProfile:
