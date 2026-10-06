@@ -123,6 +123,11 @@ profiles:
       load_mode: "none"
       threads: 16
       gpu_layers: 99
+      # ngram 推测解码（A/B 实测见 NOTES 第 10 章）：复制/改写代码类输出
+      # decode +15~36%（acceptance ≈99%），其他场景无损失。
+      extra_args:
+        - "--spec-type"
+        - "ngram-simple"
       # 同目录的 mmproj-Q8_0.gguf 会被自动识别；这里显式写 = 指定文件且默认开启
       # mmproj_path: "D:/models/Tile/Tile-35BA3B apex/mmproj-Q8_0.gguf"
     # **实测**值。理论公式在这里偏低 0.76 GiB，所以界面显示实测值。

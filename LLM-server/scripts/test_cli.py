@@ -166,6 +166,27 @@ def main() -> int:
     cfg, _ = load_cfg(["serve", "--autostart"])
     check("--autostart 显式开启", cfg.autostart_backend, True)
 
+    print("\n[12] extra_args 逃生舱：校验与告警")
+    cfg, _ = load_cfg(["serve"])
+    check("默认无额外参数", cfg.extra_args, [])
+
+    cfg.extra_args = ["--spec-type", "ngram-simple"]
+    check("合法 extra_args 无校验问题", cfg.validate(), [])
+    check("合法 extra_args 无告警",
+          [w for w in cfg.warnings() if "extra_args" in w], [])
+
+    cfg.extra_args = ["--ubatch-size", "1024"]
+    check("与管理参数重复会告警",
+          any("extra_args" in w for w in cfg.warnings()), True)
+
+    cfg.extra_args = ["--ok", ""]
+    check("空项被校验拦下",
+          any("extra_args" in p for p in cfg.validate()), True)
+
+    cfg.extra_args = "--spec-type ngram-simple"
+    check("非列表被校验拦下",
+          any("extra_args" in p for p in cfg.validate()), True)
+
     print("\n" + "=" * 60)
     print(f"通过 {PASSED} 项，失败 {len(FAILED)} 项")
     for name in FAILED:

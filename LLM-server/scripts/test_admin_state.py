@@ -316,6 +316,93 @@ def main() -> int:
           round(2 * 10 * 8 * 128 * 131072 * 1.0625 / (1024 ** 3), 3))
 
     print()
+    print("[9] extra_args 逃生舱：profile -> 配置 -> 命令行")
+    from llm_server.core.server import (  # noqa: PLC0415
+        LlamaBackendServer,
+        build_load_profiles,
+    )
+
+    entry = mk("apex-extra.gguf",
+               settings={"extra_args": ["--spec-type", "ngram-simple"]})
+    cfg_x = ServerConfig()
+    changed = reg.apply_to_config(entry, cfg_x)
+    check("profile 的 extra_args 被应用", cfg_x.extra_args,
+          ["--spec-type", "ngram-simple"])
+    check("changed 列表包含 extra_args", "extra_args" in changed, True)
+
+    class _Backend:
+        exe = _P("D:/fake/llama-server.exe")
+
+    prof = build_load_profiles(ServerConfig())[0]
+    cmd_extra = LlamaBackendServer(cfg_x, _Backend()).build_command(prof)
+    cmd_plain = LlamaBackendServer(ServerConfig(), _Backend()).build_command(prof)
+    check("命令行末尾追加透传参数", cmd_extra[-2:], ["--spec-type", "ngram-simple"])
+    check("默认配置不追加任何透传参数", len(cmd_extra) - len(cmd_plain), 2)
+
+    print()
+    print("[10] 思考预算/档位注入：默认 4096 + high，客户端零配置")
+    from llm_server.api.gateway import apply_default_reasoning  # noqa: PLC0415
+
+    cfg_tb = ServerConfig()  # budget 4096；effort 库默认留空，这里模拟服务配置
+    cfg_tb.default_reasoning_effort = "high"
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    check("chat 请求注入预算与档位",
+          (apply_default_reasoning(body, "/v1/chat/completions", cfg_tb),
+           body.get("thinking_budget_tokens"),
+           body.get("chat_template_kwargs", {}).get("reasoning_effort")),
+          (True, 4096, "high"))
+
+    body5 = {"messages": [], "max_tokens": 1024}
+    apply_default_reasoning(body5, "/v1/chat/completions", cfg_tb)
+    check("小 max_tokens 时预算收紧到 max-512",
+          body5["thinking_budget_tokens"], 512)
+
+    body6 = {"messages": [], "max_tokens": 8192}
+    apply_default_reasoning(body6, "/v1/chat/completions", cfg_tb)
+    check("max_tokens 足够时用默认 4096", body6["thinking_budget_tokens"], 4096)
+
+    body7 = {"messages": [], "max_tokens": 300}
+    apply_default_reasoning(body7, "/v1/chat/completions", cfg_tb)
+    check("max_tokens 太小则预算收为 0（不挤占正文）",
+          body7["thinking_budget_tokens"], 0)
+
+    body8 = {"messages": [], "max_completion_tokens": 2048}
+    apply_default_reasoning(body8, "/v1/chat/completions", cfg_tb)
+    check("兼容 max_completion_tokens", body8["thinking_budget_tokens"], 1536)
+
+    body2 = {"messages": [], "thinking_budget_tokens": 512,
+             "chat_template_kwargs": {"reasoning_effort": "low"}}
+    apply_default_reasoning(body2, "/v1/chat/completions", cfg_tb)
+    check("客户端已指定则不覆盖",
+          (body2["thinking_budget_tokens"],
+           body2["chat_template_kwargs"]["reasoning_effort"]), (512, "low"))
+
+    body4 = {"messages": [], "chat_template_kwargs": {"add_vision_id": True}}
+    apply_default_reasoning(body4, "/v1/chat/completions", cfg_tb)
+    check("合并进已有 chat_template_kwargs 不丢字段",
+          body4["chat_template_kwargs"],
+          {"add_vision_id": True, "reasoning_effort": "high"})
+
+    check("/v1/completions 不注入",
+          apply_default_reasoning({"prompt": "hi"}, "/v1/completions", cfg_tb), False)
+    check("无 messages 不注入",
+          apply_default_reasoning({}, "/v1/chat/completions", cfg_tb), False)
+
+    cfg_tb2 = ServerConfig()
+    cfg_tb2.default_thinking_budget = -1
+    cfg_tb2.default_reasoning_effort = ""
+    check("预算/档位都关闭时不改请求体",
+          apply_default_reasoning(
+              {"messages": []}, "/v1/chat/completions", cfg_tb2), False)
+
+    cfg_tb3 = ServerConfig()
+    cfg_tb3.reasoning_budget = 1024
+    body3 = {"messages": []}
+    apply_default_reasoning(body3, "/v1/chat/completions", cfg_tb3)
+    check("后端级已锁定时不注入预算（注入了也会被忽略）",
+          "thinking_budget_tokens" in body3, False)
+
+    print()
     print("=" * 60)
     print(f"通过 {PASSED} 项，失败 {len(FAILED)} 项")
     for name in FAILED:

@@ -62,6 +62,9 @@ BUFFERED_PATHS = {
 
 STREAM_DISABLED_PATHS = {"/v1/embeddings"}
 
+# 注入思考预算时给正文保留的最少 token 数（思考与正文共用同一个 max_tokens）
+ANSWER_HEADROOM = 512
+
 
 class BackendProxy:
     """把请求转发给 llama-server，并原样（含 SSE 流）返回响应。"""
@@ -108,6 +111,8 @@ class BackendProxy:
                 return error_response("请求体必须是 JSON 对象", "invalid_request_error", 400)
 
         wants_stream = bool(payload.get("stream")) and path not in STREAM_DISABLED_PATHS
+        if apply_default_reasoning(payload, path, self.cfg):
+            raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         if wants_stream:
             # 主动要求上游在流末尾附带 usage。llama.cpp 默认不返回，
             # 不设置的话网关的 token 统计会永远是 0。
@@ -280,6 +285,53 @@ class BackendProxy:
             "-> %s %d %.2fs in=%d out=%d",
             response.request.url.path, response.status_code, elapsed, prompt, completion,
         )
+
+
+def apply_default_reasoning(
+    payload: dict[str, Any], path: str, cfg: ServerConfig
+) -> bool:
+    """给 /v1/chat/completions 注入默认思考预算与档位，返回是否改了请求体。
+
+    标准 OpenAI 客户端不知道这两个字段，靠网关统一注入；客户端显式传入则不覆盖。
+
+    * ``thinking_budget_tokens`` ← ``cfg.default_thinking_budget``（-1 关闭）。
+      若请求带了较小的 ``max_tokens``/``max_completion_tokens``，自动收紧到
+      ``max_tokens - ANSWER_HEADROOM``（下限 0），保证正文有位置可写。
+      要求 ``cfg.reasoning_budget < 0``：llama.cpp 只在后端
+      ``--reasoning-budget=-1`` 时才认请求级预算，否则注入了也会被忽略。
+    * ``chat_template_kwargs.reasoning_effort`` ← ``cfg.default_reasoning_effort``
+      （留空关闭）。
+    """
+    if path != "/v1/chat/completions":
+        return False
+    if not isinstance(payload, dict) or "messages" not in payload:
+        return False
+    changed = False
+    if ("thinking_budget_tokens" not in payload
+            and cfg.default_thinking_budget >= 0
+            and cfg.reasoning_budget < 0):
+        budget = cfg.default_thinking_budget
+        limit = payload.get("max_tokens")
+        if not _is_positive_int(limit):
+            limit = payload.get("max_completion_tokens")
+        if _is_positive_int(limit):
+            budget = min(budget, max(0, limit - ANSWER_HEADROOM))
+        payload["thinking_budget_tokens"] = budget
+        changed = True
+    effort = (cfg.default_reasoning_effort or "").strip()
+    if effort:
+        kwargs = payload.get("chat_template_kwargs")
+        if not isinstance(kwargs, dict):
+            kwargs = {}
+        if "reasoning_effort" not in kwargs:
+            kwargs["reasoning_effort"] = effort
+            payload["chat_template_kwargs"] = kwargs
+            changed = True
+    return changed
+
+
+def _is_positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _harvest_usage(chunk: bytes, holder: dict[str, Any]) -> None:

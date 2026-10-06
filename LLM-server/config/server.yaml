@@ -82,7 +82,19 @@ jinja: true               # 使用模型内置 chat template
 cont_batching: true
 metrics: true
 cache_reuse: 0            # 多轮长对话强烈建议设为 256：避免每轮重新预填充整个历史
-reasoning_budget: -1      # 该模型输出 <think> 思考段；>=0 可限制思考 token 数
+# 思考预算（两层，配合使用）：
+# 1) 后端级 reasoning_budget：-1 = 不限制。**必须保持 -1**，因为 llama.cpp 只在
+#    服务器端为 -1 时才认请求级的 thinking_budget_tokens；设 0/正数会锁死所有请求。
+reasoning_budget: -1
+# 2) 网关自动注入 default_thinking_budget：**标准 OpenAI 客户端无需传任何参数**，
+#    网关统一填 thinking_budget_tokens。4096 = 社区 agent 场景推荐值（本机模型难题
+#    实际只想 ~700 token，4096 是不会用到的上限）。若请求带了较小的 max_tokens，
+#    网关会自动收紧到 max_tokens-512，保证正文有位可写。 -1 = 关闭注入。
+default_thinking_budget: 4096
+# 3) 网关默认思考档位 default_reasoning_effort（chat_template_kwargs.reasoning_effort）：
+#    实测（NOTES 第 10 章）hard 算术题 low/medium 都算错、只有 high 算对；且 high
+#    在简单题上更快（xhigh 指令让它果断收尾）。留空 = 不注入，客户端可自行覆盖。
+default_reasoning_effort: "high"
 
 # ---------------- 网络 ----------------
 backend_host: "127.0.0.1" # llama.cpp 只监听本机，不直接暴露到内网

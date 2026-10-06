@@ -126,6 +126,32 @@ class ServerConfig:
     metrics: bool = True
     reasoning_budget: int = -1  # 思考型模型：>=0 时限制思考 token
 
+    # ---- 逃生舱 ----
+    # 直接透传给 llama-server 的额外参数，原样追加到命令行末尾（不参与自动
+    # 降级阶梯）。用于项目还没做成配置项的后端开关，例如：
+    #   extra_args: ["--spec-type", "ngram-simple"]   # ngram 推测解码
+    # 写在 models.yaml 某个 profile 的 settings 里可只对该模型生效。
+    # 实测（见 NOTES 第 10 章）：ngram-simple 在“复制/改写代码”类输出上
+    # decode +15~36%（acceptance ≈99%），其他场景无损失。
+    extra_args: list[str] = field(default_factory=list)
+
+    # 网关给 /v1/chat/completions **自动注入**的思考预算（thinking_budget_tokens）。
+    # 标准 OpenAI 客户端不知道这个字段，全靠这里统一设置；客户端显式传入则以其为准。
+    # 为什么 4096：社区 agent 场景推荐值（llama.cpp 实测把预算设成 4096 后
+    # UnderthinkingBench 准确率 63.6%→81.8%），且本机模型难题实际只想 ~700 token，
+    # 所以 4096 是“防跑飞”的上限而不是强制思考量。若客户端给了较小的 max_tokens，
+    # 网关会自动收紧到 max_tokens-512（给正文留量），不会把正文挤没。
+    # -1 = 关闭注入。⚠ 前提是后端保持 reasoning_budget=-1 —— llama.cpp 只在服务器端
+    # 为 -1 时才认请求级 thinking_budget_tokens；设成正数时网关不注入（注了也被忽略）。
+    default_thinking_budget: int = 4096
+
+    # 网关给 /v1/chat/completions 注入的默认思考档位（chat_template_kwargs.
+    # reasoning_effort）。留空 = 不注入；客户端自己指定时以客户端为准。
+    # 实测（NOTES 第 10 章）：hard 算术题上 low/medium 都算错、只有 high 算对；
+    # 且 high 在简单题上反而更快（xhigh 指令让它果断收尾），故 server.yaml 填 high。
+    # 可选值（模板别名）：minimal/low, medium, high/xhigh/max/ultracode/extreme, none/off
+    default_reasoning_effort: str = ""
+
     # ---- 网络 ----
     backend_host: str = "127.0.0.1"  # llama.cpp 只监听本机
     backend_port: int = 8080
@@ -229,6 +255,20 @@ class ServerConfig:
         for rule in self.tensor_overrides:
             if "=" not in rule:
                 problems.append(f"tensor_overrides 规则缺少 '=': {rule}")
+        if not isinstance(self.extra_args, list):
+            problems.append("extra_args 必须是字符串列表")
+        else:
+            for item in self.extra_args:
+                if not isinstance(item, str) or not item.strip():
+                    problems.append(f"extra_args 里有非法项: {item!r}")
+        if self.default_thinking_budget < -1:
+            problems.append("default_thinking_budget 至少为 -1（-1 表示不注入）")
+        effort = (self.default_reasoning_effort or "").strip().lower()
+        if effort and effort not in (
+            "none", "off", "minimal", "low", "medium",
+            "high", "xhigh", "max", "ultracode", "extreme",
+        ):
+            problems.append(f"default_reasoning_effort 取值不合法: {self.default_reasoning_effort}")
         return problems
 
     def warnings(self) -> list[str]:
@@ -250,6 +290,23 @@ class ServerConfig:
                 f"同时设置了 cpu_moe 和 n_cpu_moe={self.n_cpu_moe}，"
                 f"以后者为准（前者被忽略）"
             )
+        if isinstance(self.extra_args, list):
+            managed = {
+                "--model", "--alias", "--host", "--port", "--ctx-size",
+                "--n-gpu-layers", "--parallel", "--batch-size", "--ubatch-size",
+                "--threads", "--flash-attn", "--cache-type-k", "--cache-type-v",
+                "--kv-offload", "--no-kv-offload", "--cpu-moe", "--n-cpu-moe",
+                "--override-tensor", "--threads-batch", "--mmproj", "--load-mode",
+                "--no-warmup", "--jinja", "--no-cont-batching", "--cache-reuse",
+                "--metrics", "--reasoning-budget",
+            }
+            dupes = sorted({a for a in self.extra_args
+                            if isinstance(a, str) and a in managed})
+            if dupes:
+                notes.append(
+                    "extra_args 与项目管理参数重复（以 extra_args 为准，请确认）: "
+                    + ", ".join(dupes)
+                )
         return notes
 
     def to_json(self) -> str:

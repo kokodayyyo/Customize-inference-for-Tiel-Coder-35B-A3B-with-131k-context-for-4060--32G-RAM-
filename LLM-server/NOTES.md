@@ -617,7 +617,75 @@ from ..net import local_client, local_async_client
 
 ---
 
-## 10. 完整脚本清单
+## 10. APEX 调优 A/B（2026-10 实测）
+
+针对 `Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1.gguf`，固定基线
+（cpu-moe / ubatch 2048 / q8_0 KV / load none / 200K）逐项开关对照。
+复现：`scripts/moe_probe.py --extra ...`；原始 JSON 在 `runtime/logs/apex-ab/`。
+
+### 10.1 推测解码：只开 `ngram-simple`
+
+| 配置 | count | prose | code | echo(复制) | edit(改码) | prefill |
+|---|---|---|---|---|---|---|
+| 基线 | 37.2 | 38.7 | 38.7 | 38.3 | 38.3 | 1183 |
+| **ngram-simple** | 37.5 | 38.9 | 39.0 | **52.2 (+36%)** | **44.0 (+15%)** | 1187 |
+| ngram-mod | 38.6 | 38.5 | 38.6 | 48.3 | 43.9 | 1204 |
+| ngram-map-k | 37.7 | 39.2 | 38.5 | 45.1 | 38.4 | 1207 |
+| ngram-cache | 28.6 | 37.0 | 34.3 | 34.6 | 29.1 | 1188 |
+
+- 日志确认 ngram-simple 在 echo/edit 上 **acceptance ≈99%、mean draft len ≈4**。
+- ngram-cache 全程拖慢；lookup-cache static/dynamic 连缓存文件都不生成。
+- 调参（size-n 6 / size-m 64）无增益；ngram-simple+mod 合并无叠加收益。
+- **结论**：APEX profile 启用 `extra_args: ["--spec-type","ngram-simple"]`。
+  收益集中在“复制/改写输入”类输出，其他场景零损失。
+
+### 10.2 reasoning-effort：三道硬题实测
+
+| 题目（预期答案）| low | medium | high |
+|---|---|---|---|
+| P2 1..10000 中数字 7 出现次数（4000）| ✅ 1072ch | ✅ 2028ch | ✅ 2657ch |
+| P3 100 万内最长 Collatz 起点（837799）| ✅ 929ch | ✅ 1039ch | ✅ 1067ch |
+| P1 987654321×123456789 数位和（63）| ❌ 答 80 | ❌ 答 56 | ✅ **答 63** |
+
+- 不设预算时 P1 三档都把 2048 token 花在思考上（`content` 为空、
+  `finish_reason=length`）——**这正是“思考吃光 max_tokens”的翻车现场**。
+- 加上预算（`thinking_budget_tokens=1024`、`max_tokens=3072`）后全部正常收尾：
+  low 50.0s / medium 57.6s / **high 50.0s（唯一答对）**；high+2048 预算 74.8s（也对）。
+- high 在简单题反而更快（简单过河题 9.7s vs medium 19.3s）——xhigh 指令让它果断
+  收尾。因此默认档位取 high（server.yaml 的 `default_reasoning_effort`）。
+- 注：P3 属“训练数据里有”的题，三档都对，区分度低；P1 这种构造题才是试金石。
+
+### 10.3 思考预算（给速度上界）
+
+- llama.cpp 请求级 `thinking_budget_tokens` **只在后端 `--reasoning-budget=-1`
+  时生效**；服务端设 0/正数会锁死所有请求。→ server.yaml 保持 -1，由网关给
+  **所有** chat 请求自动注入 `default_thinking_budget`（标准 OpenAI 客户端零配置，
+  也不会察觉这个字段）。
+- 默认 4096：社区 agent 场景推荐值；本机模型难题实际只想 ~700 token，所以它是
+  “防跑飞”的上限而非强制思考量。隐患是思考与正文共用 `max_tokens`，所以网关会按
+  请求里的 `max_tokens` 自动收紧：`budget = min(4096, max_tokens - 512)`
+  （兼容 `max_completion_tokens`），保证正文至少剩 512 token —— 10.2 里 P1
+  正文为空的翻车就是没这条。
+- 本机 decode ~30 tok/s：预算打满 4096 ≈ 多花 2.3 分钟（罕见），1024 ≈ 35s。
+- 社区参考：llama.cpp 预算 4096 让 UnderthinkingBench 准确率 63.6%→81.8% 且
+  全部答完；vLLM 预算 500–1000 时准确率最高（89.2%）；Qwen 官方长文本评测用 8192。
+
+### 10.4 上下文复用 / checkpoints
+
+| 配置 | 分歧轮 prefill | 说明 |
+|---|---|---|
+| 默认（不设）| **1.81s** | 部分前缀复用正常 |
+| `--cache-reuse 256` | 1.81s | 无额外效果 |
+| `--ctx-checkpoints 0` | 4.29s | ❗显式关掉 = 禁用部分前缀复用（慢 2.4×）|
+| `--ctx-checkpoints 16 --checkpoint-min-step 1024` | 加载即 OOM | 200K 下需多 1.5 GiB 显存 |
+
+结论：别把 `--ctx-checkpoints` 设为 0；8 GiB 卡上也不要调大。其余“未用开关”
+的判定：`--no-op-offload` 让 prefill 1200→294（禁用）；`--swa-full`/`draft-mtp`/
+`--n-cpu-ffn` 对 APEX 不适用（无滑窗/无 MTP/非 dense）。
+
+---
+
+## 11. 完整脚本清单
 
 **准备**
 
@@ -647,9 +715,9 @@ from ..net import local_client, local_async_client
 
 | 脚本 | 用途 |
 |---|---|
-| `test_cli.py` | 命令行参数解析单测（43 项）|
+| `test_cli.py` | 命令行参数解析 + 配置校验/告警单测（53 项）|
 | `test_load_ladder.py` | 加载降级阶梯单测（18 项）|
-| `test_admin_state.py` | 停止/切换/视觉/扫描目录/KV估算 状态机单测（39 项）|
+| `test_admin_state.py` | 停止/切换/视觉/扫描目录/KV估算/extra_args/思考预算注入 单测（54 项）|
 | `test_jobobject.py` | 显存不泄漏验证（8 项）|
 | `e2e_test.py` | 接口端到端（21 项）|
 | `final_acceptance.py` | 默认配置验收 |
@@ -670,7 +738,7 @@ from ..net import local_client, local_async_client
 
 ---
 
-## 11. 参考
+## 12. 参考
 
 - [llama-server 参数文档](https://mintlify.wiki/ggml-org/llama.cpp/api/tools/llama-server)
 - [llama.cpp 并行推理参数讨论 #18308](https://github.com/ggml-org/llama.cpp/discussions/18308)

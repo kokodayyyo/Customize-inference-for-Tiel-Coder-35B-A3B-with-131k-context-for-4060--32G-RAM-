@@ -1,4 +1,4 @@
-# 只是一个个人参数调优推理项目，apex量化模型能在200k上下文保持30tokens的速度
+# Personal参数调优推理项目，试图让Tiel-Coder apex量化模型能在200k上下文保持30tokens的速度
 
 把大 MoE 模型用**分层摆位**跑在普通游戏本上，对外提供 **OpenAI 兼容的内网 API** 和
 **网页控制台**。核心是把模型按“谁来算、放哪”拆开，让最贵的部分刚好放下：
@@ -121,6 +121,8 @@ start_server.bat    REM ② 起服务 + 控制台（不加载模型，约 1 秒�
 
 共同的定盘参数：`cpu_moe`（专家放内存）、`ubatch 2048`、KV `q8_0` 放显存、
 `load_mode none`（不用 mmap，快 ~17%）。所有模型都在 **8 GiB 显存**里留了安全余量。
+APEX 还额外开了 `--spec-type ngram-simple` 推测解码：复制/改写代码类输出实测
+decode **+15~36%**，其他场景零损失（见 NOTES 第 10 章）。
 
 > Tile-35B 的上下文能到 200K，是因为它每 4 层只有 1 层真注意力（其余是线性注意力，
 > 状态不随上下文增长），KV 只有 ~2 GiB；Gemma-4 是滑窗注意力（window 1024），
@@ -141,8 +143,11 @@ start_server.bat    REM ② 起服务 + 控制台（不加载模型，约 1 秒�
 死（返回 502）。代码已自动夹紧（`allow_large_ubatch: true` 可放开，不建议）。
 
 **③ 这是推理模型，思考内容在另一个字段。** 流式响应里正文在 `delta.content`，思考在
-`delta.reasoning_content`；只读 `content` 会以为“没有输出”。`max_tokens` 别太小
-（**建议 ≥1024**），否则会被思考吃光导致正文为空。
+`delta.reasoning_content`；只读 `content` 会以为“没有输出”。思考与正文共用
+`max_tokens`，且**由网关自动给所有请求注入思考预算（默认 4096）与档位 `high`——
+标准 OpenAI 客户端不需要传任何特殊参数**；请求里若带较小的 `max_tokens`，网关会
+自动把预算收紧到 `max_tokens - 512`，保证正文有位可写。要更快可显式传
+`chat_template_kwargs: {"reasoning_effort": "low"}`（可选）。
 
 **④ “服务起不来 / 只有 Python 连不上本机服务”？** 多半是系统代理（Clash/v2ray）把
 `127.0.0.1` 也代理了 → 502。项目已对所有访问本机的 httpx 客户端设 `trust_env=False`；
@@ -180,6 +185,9 @@ start_server.bat    REM ② 起服务 + 控制台（不加载模型，约 1 秒�
 | `ubatch_size` | `2048` | MoE 下最关键的性能参数，**上限 2048** |
 | `load_mode` | `"none"` | 不用 mmap，decode 快 ~17%（见坑 ①）|
 | `cache_reuse` | `0` | 多轮长对话**强烈建议设 256**，否则每轮重填整个历史 |
+| `extra_args` | `[]` | 原样透传给 llama-server 的额外参数（APEX profile 用它开 `--spec-type ngram-simple`）|
+| `default_thinking_budget` | `4096` | 网关自动注入的思考上限（会按 `max_tokens` 自动收紧；-1 关闭）|
+| `default_reasoning_effort` | `"high"` | 网关注入的默认思考档位（server.yaml 设 high；空串关闭）|
 
 命令行速查：`start_server.bat --api-key sk-xxx`、`--port 9000`、
 `--ubatch 1024`（显存紧张）、`--model "D:\other.gguf"`。

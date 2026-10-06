@@ -260,6 +260,10 @@ class LlamaBackendServer:
             cmd.append("--metrics")
         if cfg.reasoning_budget >= 0:
             cmd += ["--reasoning-budget", str(cfg.reasoning_budget)]
+        # 逃生舱：extra_args 原样追加在最后（重复时覆盖项目管理参数，符合
+        # llama.cpp “后者优先”的惯例）。不参与降级阶梯，profile 级配置经
+        # models_registry.apply_to_config 写入 cfg。
+        cmd += [str(arg) for arg in cfg.extra_args]
         return cmd
 
     def command_line(self) -> str:
