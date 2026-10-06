@@ -58,7 +58,7 @@ def main() -> int:
                         help="要填充到的 token 数，逗号分隔")
     parser.add_argument("--ubatch", type=int, default=2048)
     parser.add_argument("--batch", type=int, default=8192)
-    parser.add_argument("--threads", type=int, default=16)
+    parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--kv-type", default="q8_0")
     parser.add_argument("--no-kv-offload", action="store_true")
     parser.add_argument("--load-mode", default="none")

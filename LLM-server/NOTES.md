@@ -127,6 +127,7 @@ llama.cpp 提供三个旋钮：
 29.34 tok/s × 0.441 GiB = **12.9 GB/s**；prefill 同样是约 13.4 GB/s。
 两者卡在同一个数字上，说明瓶颈是 **CPU 侧小批量专家 GEMM 的有效访存**，
 而不是算力也不是内存带宽（DDR5 双通道理论 83 GB/s）。
+（最终配置选定 **8 线程**：既然无差异，就留一半核给桌面，边跑边干活更跟手。）
 
 **结论二：`--load-mode none` 明确更快**（decode +17.6%）。llama.cpp 自己也会警告
 `tensor overrides to CPU are used with mmap enabled - consider using --load-mode
@@ -536,7 +537,7 @@ from ..net import local_client, local_async_client
 | `kv_offload` | `true` | KV 放显存（Tile 128K 只要 1.33 GiB）|
 | `context_size` | 131072 | 改小不省显存（KV 已很小），但能缩短首字延迟 |
 | `kv_cache_type_k/v` | `q8_0` | `f16` 质量更好（+1.2 GiB，速度无变化）|
-| `threads` | 16 | **实测 8/16/24 无差异**，瓶颈不在线程数 |
+| `threads` | 8 | **实测 8/16/24 无差异**；取 8 给桌面留一半核（16/32 只会更卡）|
 | `cache_reuse` | 0 | 多轮长对话**强烈建议设 256** |
 | `flash_attention` | `true` | 必开，KV 量化需要它 |
 

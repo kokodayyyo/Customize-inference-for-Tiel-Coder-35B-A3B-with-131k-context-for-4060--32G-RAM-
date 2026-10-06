@@ -120,7 +120,7 @@ start_server.bat    REM ② 起服务 + 控制台（不加载模型，约 1 秒�
 | Gemma 4 26B-A4B Heretic APEX | `gemma-4-26B-A4B-heretic-APEX-Compact.gguf` | 14.43 GiB | 150K | 29.3 tok/s | 1324 tok/s | 5.03 GiB | gemma4 MoE，KV 很小 |
 
 共同的定盘参数：`cpu_moe`（专家放内存）、`ubatch 2048`、KV `q8_0` 放显存、
-`load_mode none`（不用 mmap，快 ~17%）。所有模型都在 **8 GiB 显存**里留了安全余量。
+`load_mode none`（不用 mmap，快 ~17%）、`threads 8`（实测 8/16/24 无差异，留一半核给桌面）。所有模型都在 **8 GiB 显存**里留了安全余量。
 APEX 还额外开了 `--spec-type ngram-simple` 推测解码：复制/改写代码类输出实测
 decode **+15~36%**，其他场景零损失（见 NOTES 第 10 章）。
 
@@ -184,6 +184,7 @@ decode **+15~36%**，其他场景零损失（见 NOTES 第 10 章）。
 | `cpu_moe` | `true` | 专家放内存（**整个方案的前提**）|
 | `ubatch_size` | `2048` | MoE 下最关键的性能参数，**上限 2048** |
 | `load_mode` | `"none"` | 不用 mmap，decode 快 ~17%（见坑 ①）|
+| `threads` | `8` | 实测 8/16/24 无差异；取 8 留一半核给桌面（16/32 只会更卡）|
 | `cache_reuse` | `0` | 多轮长对话**强烈建议设 256**，否则每轮重填整个历史 |
 | `extra_args` | `[]` | 原样透传给 llama-server 的额外参数（APEX profile 用它开 `--spec-type ngram-simple`）|
 | `default_thinking_budget` | `4096` | 网关自动注入的思考上限（会按 `max_tokens` 自动收紧；-1 关闭）|

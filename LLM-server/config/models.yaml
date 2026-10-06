@@ -42,7 +42,7 @@ default_profile:
     kv_cache_type_v: "q8_0"
     kv_offload: true
     load_mode: "none"
-    threads: 16
+    threads: 8
     gpu_layers: 99
 
 profiles:
@@ -74,7 +74,7 @@ profiles:
       kv_cache_type_v: "q8_0"
       kv_offload: true
       load_mode: "none"
-      threads: 16
+      threads: 8
       gpu_layers: 99
       # 同目录的 mmproj-BF16.gguf 会被自动识别；这里显式写 = 指定文件且默认开启
       # mmproj_path: "D:/models/Tile/Tile-35BA3B/mmproj-BF16.gguf"
@@ -121,7 +121,7 @@ profiles:
       kv_cache_type_v: "q8_0"
       kv_offload: true
       load_mode: "none"
-      threads: 16
+      threads: 8
       gpu_layers: 99
       # ngram 推测解码（A/B 实测见 NOTES 第 10 章）：复制/改写代码类输出
       # decode +15~36%（acceptance ≈99%），其他场景无损失。
@@ -173,7 +173,7 @@ profiles:
       kv_cache_type_v: "q8_0"
       kv_offload: true
       load_mode: "none"
-      threads: 16
+      threads: 8
       gpu_layers: 99
     # **实测**值（scripts/moe_probe.py）。界面优先显示这些。
     measured:

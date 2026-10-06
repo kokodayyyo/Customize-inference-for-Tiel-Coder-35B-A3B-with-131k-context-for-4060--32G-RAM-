@@ -243,8 +243,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-kv-offload", action="store_true", help="KV cache 放内存")
     p.add_argument("--ubatch", type=int, default=512)
     p.add_argument("--batch", type=int, default=2048)
-    p.add_argument("--threads", type=int, default=16,
-                   help="CPU 线程数；本机 16 核 32 线程，prefill 是 CPU 算力瓶颈")
+    p.add_argument("--threads", type=int, default=8,
+                   help="CPU 线程数；实测 8/16/24 无差异，默认 8 给桌面留余量")
     p.add_argument("--threads-batch", type=int, default=0,
                    help="prompt 处理专用线程数，0 = 与 threads 相同")
     p.add_argument("--load-mode", default="", choices=["", "auto", "mmap", "mlock",
