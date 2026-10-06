@@ -7,13 +7,13 @@
 # 这些文件是从 LM Studio 的 extensions/backends/ 复制过来的，属于可再获取的
 # 第三方产物。克隆本仓库后按 README「运行时是自包含的」一节重新复制即可，
 # 或用 scripts/fetch_runtime.py 自动完成。
-ornith-server/runtime/
+LLM-server/runtime/
 
 # ============================================================
 #  运行期产物
 # ============================================================
 *.log
-ornith-server/runtime/logs/
+LLM-server/runtime/logs/
 
 # ============================================================
 #  Python

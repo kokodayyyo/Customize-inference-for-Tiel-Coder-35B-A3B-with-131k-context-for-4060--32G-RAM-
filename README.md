@@ -56,7 +56,7 @@
 Python 依赖只有网关层需要的几个，**不需要 torch**：
 
 ```bat
-pip install -r ornith-server\requirements.txt
+pip install -r LLM-server\requirements.txt
 ```
 
 ### 模型文件（需自行获取）
@@ -90,7 +90,7 @@ pip install -r ornith-server\requirements.txt
 ```bat
 git clone <本仓库地址> "D:\personal\AI_output\local LLM"
 cd /d "D:\personal\AI_output\local LLM"
-pip install -r ornith-server\requirements.txt
+pip install -r LLM-server\requirements.txt
 ```
 
 ### 第 2 步：恢复 llama.cpp 运行时
@@ -99,19 +99,19 @@ pip install -r ornith-server\requirements.txt
 100 MB 单文件上限）。跑一次脚本从 LM Studio 复制过来：
 
 ```bat
-D:\anaconda\envs\test1\python.exe ornith-server\scripts\fetch_runtime.py
+D:\anaconda\envs\test1\python.exe LLM-server\scripts\fetch_runtime.py
 ```
 
 它会自动挑**最新的 CUDA12 引擎**并配对正确的 vendor DLL。没有 LM Studio 的话，
 用 `--from` 指定任意含 `llama-server.exe` 的目录：
 
 ```bat
-python ornith-server\scripts\fetch_runtime.py --from "D:\somewhere\llama.cpp\build\bin"
+python LLM-server\scripts\fetch_runtime.py --from "D:\somewhere\llama.cpp\build\bin"
 ```
 
 ### 第 3 步：指向你的模型
 
-编辑 `ornith-server\config\server.yaml`：
+编辑 `LLM-server\config\server.yaml`：
 
 ```yaml
 model_path: "D:/models/Tile/Tile-35BA3B/Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.gguf"
@@ -122,7 +122,7 @@ model_path: "D:/models/Tile/Tile-35BA3B/Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.g
 ### 第 4 步：自检并启动
 
 ```bat
-cd /d "D:\personal\AI_output\local LLM\ornith-server"
+cd /d "D:\personal\AI_output\local LLM\LLM-server"
 doctor.bat          REM 环境自检：GPU、运行时、精确显存/内存预算
 start_server.bat    REM 启动（加载约 12 秒）
 ```
@@ -172,7 +172,7 @@ D:\anaconda\envs\test1\python.exe scripts\client_example.py
 > 那是各阶段的**纯计算耗时**，所以得到的是"真正在算的时候有多快"，
 > 不把空闲时间算进去。
 
-每个模型的调优参数写在 **`ornith-server/config/models.yaml`** 里，形如：
+每个模型的调优参数写在 **`LLM-server/config/models.yaml`** 里，形如：
 
 ```yaml
 profiles:
@@ -202,8 +202,8 @@ profiles:
 
 ## 3. 配置
 
-配置文件 `ornith-server\config\server.yaml`，优先级：
-**代码默认值 < 配置文件 < 环境变量 `ORNITH_*` < 命令行**。
+配置文件 `LLM-server\config\server.yaml`，优先级：
+**代码默认值 < 配置文件 < 环境变量 `LLM_*` < 命令行**。
 
 ### 最常改的几项
 
@@ -513,7 +513,7 @@ D:\anaconda\envs\test1\python.exe scripts\diag_http.py
 ```
 
 本项目已把所有访问本机后端的 httpx 客户端设成 `trust_env=False`（见
-`src/ornith_server/net.py`），所以正常情况不受影响；但如果你自己写的脚本要访问
+`src/llm_server/net.py`），所以正常情况不受影响；但如果你自己写的脚本要访问
 `127.0.0.1`，记得也加上这个参数。
 
 **Q: 双击 `start_server.bat` 一闪而过？**
@@ -554,7 +554,7 @@ A: 现在不行——llama.cpp 会打印 `model has unused tensor ... -- ignorin
 0.36 GiB 属于死重。等上游支持 `qwen35moe` 的 MTP 后可以用它做自投机解码。
 
 更详细的排查过程与**测量方法论**（怎么避免把性能数据测错）见
-[`ornith-server/NOTES.md`](ornith-server/NOTES.md)。
+[`LLM-server/NOTES.md`](LLM-server/NOTES.md)。
 
 ---
 
@@ -563,7 +563,7 @@ A: 现在不行——llama.cpp 会打印 `model has unused tensor ... -- ignorin
 ```
 local LLM/
 ├── .gitignore
-└── ornith-server/
+└── LLM-server/
     ├── main.py                 # CLI 入口（serve/backend/chat/bench/doctor/models）
     ├── start_server.bat        # 一键启动
     ├── stop_server.bat         # 停止网关 + 所有 llama-server（不依赖 Python）
@@ -573,7 +573,7 @@ local LLM/
     ├── config/
     │   ├── server.yaml         # 全局配置（可被环境变量和命令行覆盖）
     │   └── models.yaml         # **多模型注册表**：扫描目录 + 每个模型的调优参数
-    ├── src/ornith_server/
+    ├── src/llm_server/
     │   ├── config.py           # 配置模型、校验、告警、ubatch 安全上限
     │   ├── net.py              # httpx 客户端构造（强制不走系统代理，见 8.x 排障）
     │   ├── models_registry.py  # 扫描模型目录、匹配 profile、估算显存/内存
@@ -650,7 +650,7 @@ local LLM/
 ### 自检清单
 
 ```bat
-cd "D:\personal\AI_output\local LLM\ornith-server"
+cd "D:\personal\AI_output\local LLM\LLM-server"
 D:\anaconda\envs\test1\python.exe scripts\check_syntax.py
 D:\anaconda\envs\test1\python.exe scripts\test_cli.py
 D:\anaconda\envs\test1\python.exe scripts\test_load_ladder.py
