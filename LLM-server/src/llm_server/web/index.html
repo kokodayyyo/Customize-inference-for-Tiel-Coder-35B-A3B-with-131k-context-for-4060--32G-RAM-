@@ -454,12 +454,14 @@ function renderStatus(){
   $('idlebox').style.display = (STATUS.state==='idle') ? 'block' : 'none';
 
   document.querySelectorAll('button[data-act="start"]').forEach(b=>{
-    b.disabled = busy || b.dataset.path === STATUS.active_path;
+    // 只有"确实在运行"的那个模型才把按钮禁掉；idle/error 状态下不能因为
+    // active_path 残留而把某个模型的启动按钮永久锁死。
+    b.disabled = busy || (STATUS.state === 'running' && b.dataset.path === STATUS.active_path);
   });
   $('btn-stop').disabled = busy || STATUS.state==='idle';
   $('btn-rescan').disabled = busy;
   document.querySelectorAll('.card').forEach(c=>{
-    c.classList.toggle('active', c.dataset.path === STATUS.active_path);
+    c.classList.toggle('active', STATUS.state === 'running' && c.dataset.path === STATUS.active_path);
   });
 }
 

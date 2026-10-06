@@ -334,6 +334,10 @@ class ModelManager:
             log.info("切换模型 -> %s", entry.path)
             self.message = "正在停止当前后端…"
             self.server.stop()
+            # 旧模型已停：先摘掉"当前模型"标记。否则这次切换若失败，界面会把
+            # 已经停掉的旧模型一直标成使用中，按钮灰掉、无法重新启动。
+            self.active_path = ""
+            self.server.profile = None
 
             self.changed_fields = self.registry.apply_to_config(entry, self.cfg)
             problems = self.cfg.validate()
@@ -367,8 +371,13 @@ class ModelManager:
             return {"ok": False, "error": "正在加载中，无法停止"}
         if self.server is not None:
             self.server.stop()
+            # 后端已经停了：清掉"当前模型"标记。否则控制台会继续把已停掉的模型
+            # 标成使用中（卡片高亮、状态栏还是旧参数），它的「启动此模型」按钮
+            # 一直是灰的，用户点不动，看起来就像"启动失败"。
+            self.server.profile = None
         self.state = STATE_IDLE
         self.message = ""
+        self.active_path = ""
         self.started_at = 0.0
         return {"ok": True}
 

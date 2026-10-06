@@ -642,10 +642,11 @@ local LLM/
 | `check_syntax.py` | 语法自检 |
 | `test_cli.py` | 命令行参数解析单测（43 项）|
 | `test_load_ladder.py` | 加载降级阶梯单测（18 项）|
+| `test_admin_state.py` | 模型停止/切换状态机单测（15 项；不加载模型）|
 | `test_jobobject.py` | 显存不泄漏验证（8 项）|
 | `e2e_test.py` | 接口端到端（21 项）|
 | `final_acceptance.py` | 默认配置验收 |
-| `test_ui.mjs` | **控制台页面集成自检**（Node 18+，21 项；`--offline` 可脱机跑）|
+| `test_ui.mjs` | **控制台页面集成自检**（Node 18+，25 项；`--offline` 可脱机跑）|
 
 **诊断 / 示例**
 
@@ -667,6 +668,7 @@ cd "D:\personal\AI_output\local LLM\LLM-server"
 D:\anaconda\envs\test1\python.exe scripts\check_syntax.py
 D:\anaconda\envs\test1\python.exe scripts\test_cli.py
 D:\anaconda\envs\test1\python.exe scripts\test_load_ladder.py
+D:\anaconda\envs\test1\python.exe scripts\test_admin_state.py
 D:\anaconda\envs\test1\python.exe main.py doctor
 D:\anaconda\envs\test1\python.exe scripts\e2e_test.py
 D:\anaconda\envs\test1\python.exe scripts\test_jobobject.py
