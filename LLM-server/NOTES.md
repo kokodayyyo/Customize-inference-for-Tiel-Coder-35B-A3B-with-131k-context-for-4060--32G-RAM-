@@ -509,7 +509,168 @@ from ..net import local_client, local_async_client
 > `ctx_scale.py` / `perf_matrix.py` 一起删除——功能分别由 `moe_probe.py` +
 > `moe_sweep.py` + `stress_ctx.py` 覆盖且更准确。
 
-## 8. 参考
+## 8. 自动降级与调参速查（README 移入）
+
+### 8.1 启动失败时的自动降级阶梯
+
+`core/server.py` 按下面顺序重试（每次记录到 `runtime/logs/`）。原则：**优先保住
+上下文长度，先牺牲速度相关的项**：
+
+1. 配置值
+2. 宿主内存锁定失败 → **回落 mmap 重试同一套参数**（不降 ubatch，病因不在显存）
+3. 进程崩溃/断言 → 同样先试 mmap（原因不明时先排除内存锁定问题）
+4. 专家退回内存（仅当设了 `n_cpu_moe`）
+5. 逐级降 `ubatch`：2048 → 1024 → 512
+6. KV 量化降到 `q4_0` → KV cache 移到内存
+7. 上下文降到 75% → 32768
+8. 最后才把 8 层留给 CPU
+
+### 8.2 参数速查（按影响从大到小）
+
+| 参数 | 默认 | 影响 |
+|---|---|---|
+| **`ubatch_size`** | 2048 | **MoE 下最关键**，直接决定 prefill（443 → 1049 tok/s）。**上限 2048** |
+| **`load_mode`** | `none` | 不用 mmap，decode 快 17%。需锁 ~12–15 GiB 锁页内存，失败自动回落 |
+| **`cpu_moe`** | `true` | 专家权重放内存，整个方案的前提 |
+| `n_cpu_moe` | -1 | 后 N 层专家上显存。**只有**配合 ubatch 2048 才安全，基准版 +6% |
+| `kv_offload` | `true` | KV 放显存（Tile 128K 只要 1.33 GiB）|
+| `context_size` | 131072 | 改小不省显存（KV 已很小），但能缩短首字延迟 |
+| `kv_cache_type_k/v` | `q8_0` | `f16` 质量更好（+1.2 GiB，速度无变化）|
+| `threads` | 16 | **实测 8/16/24 无差异**，瓶颈不在线程数 |
+| `cache_reuse` | 0 | 多轮长对话**强烈建议设 256** |
+| `flash_attention` | `true` | 必开，KV 量化需要它 |
+
+### 8.3 调优建议（按性价比）
+
+1. **`cache_reuse: 256`** —— 多轮长对话必开。否则每轮重新预填充整个历史，
+   填到 9.6 万 token 时首字要 103 秒，这是最大的浪费。
+2. **`n_cpu_moe: 36` + `ubatch 2048`**（仅基准版余量够）—— +6% decode，显存到 6.8 GiB。
+3. **`kv_cache_type: f16`** —— 不提速，但质量更好（多占 1.2 GiB）。
+
+---
+
+## 9. Gemma-4 26B-A4B（滑窗注意力）标定
+
+### 9.1 结构与张量账本
+
+| 参数 | 值 |
+|---|---|
+| 架构 | `gemma4` |
+| 层数 | 30 |
+| 专家 | **128 个 / 每 token 激活 8 个**（专家 FFN 704）|
+| attention.head_count | 16 |
+| **`head_count_kv`（逐层）** | `[8,8,8,8,8,2, ...]` —— 每 6 层 1 层全注意力（30 层里共 **5 层**）|
+| `sliding_window` / `sliding_window_pattern` | 1024 / 每 6 层 False（全注意力），其余 True（滑窗）|
+| `key_length` / `key_length_swa` | 512 / 256 |
+| 训练上下文 | 262144 |
+
+本机两份同一架构的 GGUF：`...StyleTune-V2-QAT-UD-Q4_K_XL`（Q4_0 QAT，13.61 GiB）
+与 `...heretic-APEX-Compact`（APEX 混合量化，14.43 GiB）。heretic 版账本：
+
+```
+专家 *_exps   12.88 GiB   → 内存
+其余可上显存    1.54 GiB   → 显存
+```
+
+**KV 很小**（只有 5 层随上下文增长，滑窗层固定 window 1024）：
+
+| 上下文 | KV q8_0 | KV q4_0 |
+|---|---|---|
+| 128K | 1.43 GiB | 0.76 |
+| 150K | 1.66 | 0.88 |
+| 200K | 2.18 | 1.16 |
+| 256K | 2.76 | 1.46 |
+
+### 9.2 KV 估算：代码补了滑窗支持
+
+`ModelShape.kv_gib` 原先只认 `full_attention_interval`（线性注意力），对 gemma4 这种
+**滑窗**完全没概念 —— 会把 128K 的 KV 算成 **63.75 GiB**（荒谬）。已改为**按层累加**：
+滑窗层取 `min(context, sliding_window)`，全注意力层取 `context`，并读取
+`head_count_kv` / `sliding_window_pattern` / `key_length_swa` 等列表字段。
+
+- gemma4：128K=1.43 / 256K=2.76 GiB ✅
+- Tile（回归）：128K=1.33 GiB 不变 ✅
+- `scripts/test_admin_state.py` 第 [8] 组锁了这个行为（滑窗按层算 + 普通模型走旧公式）
+
+### 9.3 摆位标定（cpu-moe / q8_0 KV / ubatch 2048 / load none）
+
+| 模型 | 上下文 | KV | decode | prefill | 显存净增 | 说明 |
+|---|---|---|---|---|---|---|
+| StyleTune Q4_0 | 128K | 1.43 | 29.1 | 1378 | 4.68 GiB | 最从容 |
+| StyleTune Q4_0 | 170K | 1.87 | 26.9 | 1378 | 5.46 GiB | |
+| StyleTune Q4_0 | 200K | 2.18 | 28.0 | 1367 | 5.92 GiB | 余量偏小 |
+| StyleTune Q4_0 | 256K + **q4_0** | 1.46 | 27.8 | 1368 | 5.62 GiB | 拉满上下文 |
+| StyleTune Q4_0 | 256K + **q8_0** | 2.76 | 24.4 | **333** | 5.92 GiB | ❌ 撞 8 GiB 天花板 |
+| heretic-APEX | **150K**（采用） | 1.66 | 29.3 | 1324 | 5.03 GiB | 当前 profile |
+
+**关键结论：`prefill` 基本与上下文无关**（8K 提示下 128K/170K/200K/256K 都是
+~1300–1380）。256K+q8_0 掉到 333 纯属**显存被挤爆**（总量顶到 7.9 GiB），不是注意力
+变慢。8 GiB 卡的硬约束是**显存总量**，不是上下文长度本身。
+
+### 9.4 踩坑：残留实例导致换模型加载失败
+
+一次探测被中止后，留下一个 `llama-server`（PID 47508）仍占 **12.96 GiB 内存 +
+5.7 GiB 显存**。此时再加载任何模型都会
+`unable to allocate CUDA_Host buffer` —— 因为 `load_mode none` 要一口气锁 ~13 GiB
+锁页内存，而可用内存只剩 2 GiB。**换模型 / 重新标定前，先 `stop_server.bat` 或确认
+没有残留 `llama-server.exe`。**（同类病因见 4.4b）
+
+---
+
+## 10. 完整脚本清单
+
+**准备**
+
+| 脚本 | 用途 |
+|---|---|
+| `fetch_runtime.py` | 克隆后恢复 `runtime/`（那些二进制不入库）|
+| `check_deps.py` | 依赖自检 |
+| `check_syntax.py` | 语法检查 + **包导入冒烟**（抓相对导入写错层级）|
+
+**看模型**
+
+| 脚本 | 用途 |
+|---|---|
+| `gguf_raw.py` | 转储 GGUF 全部元数据（层数、专家数、全注意力/滑窗层）|
+| `gguf_tensors.py` | **精确张量账本**：专家 vs 其余、量化分布、每层专家体积 |
+| `sysinfo.py` | 内存与磁盘（不依赖 WMI，避免权限问题）|
+
+**测性能**
+
+| 脚本 | 用途 |
+|---|---|
+| `moe_probe.py` | 单次摆位实测（加载 / 显存 / 内存 / decode / prefill）|
+| `moe_sweep.py` | 批量扫描与对比表（`--preset default\|ubatch\|final`）|
+| `stress_ctx.py` | **中文长提示逐级填充，检测崩溃** |
+
+**验证**
+
+| 脚本 | 用途 |
+|---|---|
+| `test_cli.py` | 命令行参数解析单测（43 项）|
+| `test_load_ladder.py` | 加载降级阶梯单测（18 项）|
+| `test_admin_state.py` | 停止/切换/视觉/扫描目录/KV估算 状态机单测（39 项）|
+| `test_jobobject.py` | 显存不泄漏验证（8 项）|
+| `e2e_test.py` | 接口端到端（21 项）|
+| `final_acceptance.py` | 默认配置验收 |
+| `test_ui.mjs` | 控制台页面集成自检（Node 18+，33 项；`--offline` 可脱机）|
+
+**诊断 / 示例**
+
+| 脚本 | 用途 |
+|---|---|
+| `diag_sse.py` | 打印流式响应原始片段（确认 `reasoning_content` 等字段）|
+| `diag_usage.py` | 对比 usage / timings / metrics 三种取数口径 |
+| `diag_http.py` | **本机 httpx / urllib 对比**（定位系统代理拦截）|
+| `diag_health.py` | 后端 `/health` 的 httpx vs urllib 实况对比 |
+| `client_example.py` | 调用示例（SDK / 原生 HTTP / 流式）|
+
+> 诊断脚本**不自己启动后端**，直接打一个已经在跑的服务，默认 `http://127.0.0.1:8000`，
+> 加 `--base-url http://127.0.0.1:8080` 可看 llama.cpp 的原始输出。
+
+---
+
+## 11. 参考
 
 - [llama-server 参数文档](https://mintlify.wiki/ggml-org/llama.cpp/api/tools/llama-server)
 - [llama.cpp 并行推理参数讨论 #18308](https://github.com/ggml-org/llama.cpp/discussions/18308)
