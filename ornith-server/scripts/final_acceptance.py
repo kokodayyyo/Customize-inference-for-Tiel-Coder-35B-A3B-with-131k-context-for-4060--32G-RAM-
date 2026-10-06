@@ -1,7 +1,7 @@
-"""最终验收：用默认配置（128K 上下文）启动服务，调用后关闭。
+"""最终验收：用默认配置启动服务，调用后关闭。
 
 与 e2e_test.py 的区别：e2e 用小上下文测接口正确性；本脚本验证
-**生产默认配置**能否真正加载并服务 128K 上下文。
+**生产默认配置**能否真正加载并服务长上下文。
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ def main() -> int:
                 print(LOG.read_text(encoding="utf-8", errors="replace")[-3000:])
                 return 1
             try:
-                r = httpx.get(f"{API}/health", timeout=3)
+                r = httpx.get(f"{API}/health", timeout=3, trust_env=False)
                 health = r.json()
                 if health.get("ready"):
                     ready = True
@@ -100,10 +100,10 @@ def main() -> int:
         print(f"健康检查: {json.dumps(health, ensure_ascii=False)}")
         print(f"加载后显存: used={used1:.2f} (增量 {used1 - used0:+.2f}) free={free1:.2f} GiB")
 
-        print("\n--- 128K 上下文实际推理测试 ---")
+        print(f"\n--- 长上下文实际推理测试（服务端 ctx={os.environ.get('ORNITH_CONTEXT_SIZE') or '配置值'}）---")
         prompt = (
             "下面是一段用于验证长上下文能力的说明。请阅读后用一句话回答："
-            "128K 上下文在实际使用中最大的代价是什么？\n\n"
+            "长上下文在实际使用中最大的代价是什么？\n\n"
             + "长上下文的主要开销来自注意力计算需要读取完整的键值缓存。" * 200
         )
         payload = {
@@ -113,7 +113,7 @@ def main() -> int:
             "temperature": 0,
         }
         started = time.perf_counter()
-        r = httpx.post(f"{API}/v1/chat/completions", json=payload, timeout=900)
+        r = httpx.post(f"{API}/v1/chat/completions", json=payload, timeout=900, trust_env=False)
         elapsed = time.perf_counter() - started
         if r.status_code != 200:
             print(f"请求失败 HTTP {r.status_code}: {r.text[:400]}")
@@ -138,6 +138,7 @@ def main() -> int:
             json={**payload, "messages": [{"role": "user", "content": "简短说明 KV cache 的作用。"}],
                   "stream": True},
             timeout=900,
+            trust_env=False,  # 不走系统代理（本机装了 Clash/v2ray 时会把回环请求也代理掉）
         ) as resp:
             for line in resp.iter_lines():
                 if not line.startswith("data:"):
@@ -159,7 +160,7 @@ def main() -> int:
               f"decode {timings.get('predicted_per_second', 0):.1f} tok/s "
               f"prefill {timings.get('prompt_per_second', 0):.0f} tok/s")
 
-        stats = httpx.get(f"{API}/stats", timeout=30).json()
+        stats = httpx.get(f"{API}/stats", timeout=30, trust_env=False).json()
         print(f"\n网关统计: {json.dumps(stats, ensure_ascii=False)}")
 
         print("\n--- 关闭服务 ---")
@@ -188,7 +189,7 @@ def main() -> int:
         if not released or leftover:
             print("\n[验收失败] 关闭后资源未完全释放。")
             return 1
-        print("\n[验收通过] 默认 128K 配置可正常加载、服务与关闭。")
+        print("\n[验收通过] 默认配置可正常加载、服务与关闭。")
         return 0
     finally:
         if proc.poll() is None:

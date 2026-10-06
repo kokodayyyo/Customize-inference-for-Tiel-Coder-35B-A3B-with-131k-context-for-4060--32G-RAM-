@@ -1,27 +1,33 @@
-# 在 8GB 显存 + 32GB 内存的笔记本上跑 35B MoE，128K 上下文
+# 在 8GB 显存 + 32GB 内存的笔记本上跑 35B MoE，200K 上下文
 
 把 **Tile-35B-A3B**（Qwen3-Next 式混合架构 MoE）跑在 **RTX 4060 Laptop（8GB 显存）** 上，
-提供内网 OpenAI 兼容 API，**默认 128K 上下文**。
+提供内网 OpenAI 兼容 API 与**网页控制台**，默认 **200K 上下文**。
 
 核心做法是 **MoE 分层摆位**——专家权重放内存，注意力和 KV cache 放显存：
 
 | 部分 | 体积 | 放哪 |
 |---|---|---|
-| 专家权重 `*_exps`（256 专家 × 40 层）| **14.12 GiB** | **内存** |
-| 注意力 / 线性注意力 / embedding / 共享专家 | **2.38 GiB** | **显存** |
-| KV cache（128K，q8_0，只算 10 个全注意力层）| **1.33 GiB** | **显存** |
+| 专家权重 `*_exps`（256 专家 × 40 层）| **12.19 GiB** | **内存** |
+| 注意力 / 线性注意力 / embedding / 共享专家 | **1.54 GiB** | **显存** |
+| KV cache（**200K**，q8_0，只算 10 个全注意力层）| **2.03 GiB** | **显存** |
 
-实测效果：
+实测效果（APEX 13.7 GiB 版 @ 200K）：
 
-| 上下文填充量 | prefill | 首字延迟 | **decode** | 显存占用 |
+| 指标 | 实测 |
+|---|---|
+| **decode** | **38.1 tok/s** |
+| **prefill** | **1,153 tok/s** |
+| 加载耗时 | 10.6 s |
+| 显存净增 | 5.07 GiB |
+| 内存工作集 | 13.76 GiB |
+| 128K 上下文下的 decode（基准版 16.9 GiB）| 29.2 tok/s |
+
+仓库里预置了**两套已标定参数**，网页上点一下就能切换（见「快速开始 · 第 5 步」）：
+
+| 模型 | 体积 | 上下文 | decode | 特点 |
 |---|---|---|---|---|
-| 空载 | — | 0.4 s | **28.3 tok/s** | 5.31 GiB |
-| 6.4K | 975 tok/s | 6.6 s | **27.9 tok/s** | 5.35 GiB |
-| 25.6K | 1,068 tok/s | 24.0 s | **24.4 tok/s** | 5.38 GiB |
-| 52.3K | 1,019 tok/s | 51.4 s | **22.0 tok/s** | 5.51 GiB |
-| **95.8K** | **928 tok/s** | 103.3 s | **19.9 tok/s** | 5.68 GiB |
-
-显存几乎不随填充量变化，decode 从空载填到 9.6 万 token 只掉 **30%**。
+| **APEX** `...APEX-I-MiniPlus-V2.1` | 13.74 GiB | **200K** | **38.1 tok/s** | 更快更省，量化更低（Q3_K / IQ3_XXS）|
+| **基准版** `...MTP-UD-IQ4_XS` | 16.88 GiB | 128K | 29.2 tok/s | 质量更好（IQ4_XS）|
 
 ---
 
@@ -55,19 +61,25 @@ pip install -r ornith-server\requirements.txt
 
 ### 模型文件（需自行获取）
 
-```
-Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.gguf   16.88 GiB
-```
+仓库预置了两套已标定参数，对应两个 GGUF（**都不随仓库分发**）：
 
-它是 **`qwen35moe` 架构**（Qwen3-Next 式：41 层中 1 层是 MTP 头被忽略、
-40 个计算层里每 4 层只有 1 层是真注意力，其余是线性注意力）。
+| 文件 | 体积 | 上下文 | 说明 |
+|---|---|---|---|
+| `Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1.gguf` | 13.74 GiB | **200K** | **默认**，更快更省 |
+| `Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.gguf` | 16.88 GiB | 128K | 质量更好 |
+
+两者都是 **`qwen35moe` 架构**（Qwen3-Next 式：40 个计算层里每 4 层只有 1 层是
+真注意力，其余是线性注意力；256 专家、每 token 激活 8 个）。
 
 > 本项目**不附带模型**。请从你获取该模型的渠道下载，放到任意位置后改配置指向它。
 >
 > 换成**其它同架构的 GGUF** 也能跑，但显存/内存预算和性能数字要重新标定——
 > 本项目自带全套工具（见第 9 节），流程是：
 > `gguf_raw.py` 看结构 → `gguf_tensors.py` 算字节账 → `moe_sweep.py` 扫参数
-> → `stress_ctx.py` 验证长上下文。
+> → `stress_ctx.py` 验证长上下文 → 把结果写进 `config/models.yaml`。
+>
+> 非 MoE 模型（dense）也列得出来，但没有 `cpu_moe` 摆位收益，会用
+> `default_profile` 的保守参数启动。
 
 ---
 
@@ -118,6 +130,7 @@ start_server.bat    REM 启动（加载约 12 秒）
 看到这个就是好了：
 
 ```
+控制台    : http://127.0.0.1:8000/ui      ← 换模型 / 看状态
 本机访问  : http://127.0.0.1:8000/v1
 内网访问  : http://192.168.5.4:8000/v1     ← 你的实际内网 IP
 接口文档  : http://127.0.0.1:8000/docs
@@ -131,6 +144,42 @@ start_server.bat    REM 启动（加载约 12 秒）
 ```bat
 D:\anaconda\envs\test1\python.exe scripts\client_example.py
 ```
+
+### 第 5 步：换模型 —— 打开网页控制台
+
+浏览器访问 **`http://127.0.0.1:8000/ui`**：
+
+* 自动扫描 `config/models.yaml` 里 `search_roots` 指定的目录（默认 `D:/models`）
+* 每个模型显示体积、结构、**预计显存/内存占用**、以及是否已标定
+* **点「启动此模型」即可** —— 自动停掉当前模型、套用该模型预先调好的参数、
+  加载新的（约 10–15 秒，页面有进度条）
+* 顶部实时显示状态、上下文、KV 位置、显存空闲；还能看启动命令行和后端日志
+
+每个模型的调优参数写在 **`ornith-server/config/models.yaml`** 里，形如：
+
+```yaml
+profiles:
+  - match: "Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1"
+    label: "Tile 35B-A3B APEX"
+    note: "Q3_K+IQ3_XXS / 13.7 GiB / 200K"
+    settings:
+      model_alias: "tile-35b-a3b-apex"
+      context_size: 204800      # 200K
+      cpu_moe: true
+      ubatch_size: 2048
+      load_mode: "none"
+```
+
+匹配规则：完整路径 → 文件名完全相同 → 文件名子串；都不中就用 `default_profile`。
+
+> **换模型期间**（约 10–15 秒）`/v1/*` 会返回明确的 503「模型正在加载」，
+> 而不是含义模糊的 502。
+>
+> 控制台的「停止服务」只停**模型**，网关会保留 —— 这样你能直接再启动别的模型。
+> 想全部关掉用 `stop_server.bat`。
+
+如果服务启用了 API Key（`--api-key`），控制台的**数据接口**同样需要鉴权：
+页面右上角「API Key」按钮填一次即可（存在浏览器本地）。
 
 ---
 
@@ -436,6 +485,20 @@ start_server.bat --ctx 32768 --parallel 4
 
 ## 8. 排障
 
+**Q: 服务起不来 / 控制台打不开 / 一直"加载中"？**
+A: 先看是不是**系统代理**在捣乱。机器上装了 Clash / v2ray 之类（例如
+`127.0.0.1:7897`）时，Python 的 `httpx` 会从 **Windows 注册表**读到代理设置，
+把发往 `127.0.0.1` 的请求也丢给代理并拿到 **502** —— 而 PowerShell、浏览器都正常，
+所以看起来像"只有 Python 连不上"。跑一次诊断：
+
+```bat
+D:\anaconda\envs\test1\python.exe scripts\diag_http.py
+```
+
+本项目已把所有访问本机后端的 httpx 客户端设成 `trust_env=False`（见
+`src/ornith_server/net.py`），所以正常情况不受影响；但如果你自己写的脚本要访问
+`127.0.0.1`，记得也加上这个参数。
+
 **Q: 双击 `start_server.bat` 一闪而过？**
 A: 说明脚本报错了。跑 `doctor.bat` 看自检结果。
 
@@ -486,24 +549,30 @@ local LLM/
 └── ornith-server/
     ├── main.py                 # CLI 入口（serve/backend/chat/bench/doctor/models）
     ├── start_server.bat        # 一键启动
-    ├── stop_server.bat         # 停止所有 llama-server（不依赖 Python）
+    ├── stop_server.bat         # 停止网关 + 所有 llama-server（不依赖 Python）
     ├── doctor.bat              # 环境自检
     ├── requirements.txt
     ├── README.md / NOTES.md
     ├── config/
-    │   └── server.yaml         # 配置（可被环境变量和命令行覆盖）
+    │   ├── server.yaml         # 全局配置（可被环境变量和命令行覆盖）
+    │   └── models.yaml         # **多模型注册表**：扫描目录 + 每个模型的调优参数
     ├── src/ornith_server/
     │   ├── config.py           # 配置模型、校验、告警、ubatch 安全上限
+    │   ├── net.py              # httpx 客户端构造（强制不走系统代理，见 8.x 排障）
+    │   ├── models_registry.py  # 扫描模型目录、匹配 profile、估算显存/内存
     │   ├── bench.py            # 基准测试
     │   ├── core/
     │   │   ├── backend.py      # 运行时探测、GPU 查询、DLL 路径配对
     │   │   ├── server.py       # 进程管理、MoE 摆位命令行、分级降级
     │   │   ├── gguf.py         # GGUF 元数据 + 张量索引解析、摆位预算
     │   │   └── jobobject.py    # Windows Job Object 兜底
-    │   └── api/
-    │       ├── gateway.py      # FastAPI 网关（OpenAI 兼容 + 流式透传 + 崩溃诊断）
-    │       ├── middleware.py   # 鉴权、并发排队、用量统计
-    │       └── metrics.py      # 指标收集（JSON + Prometheus）
+    │   ├── api/
+    │   │   ├── gateway.py      # FastAPI 网关（OpenAI 兼容 + 流式透传 + 崩溃诊断）
+    │   │   ├── admin.py        # ModelManager + /admin/* 管理接口
+    │   │   ├── middleware.py   # 鉴权、并发排队、用量统计
+    │   │   └── metrics.py      # 指标收集（JSON + Prometheus）
+    │   └── web/
+    │       └── index.html      # 网页控制台（单文件，无构建、无 CDN）
     ├── scripts/                # 见下方清单
     └── runtime/                # 运行时与日志（.gitignore 排除，用 fetch_runtime.py 恢复）
         ├── llama.cpp/backends/ #   912 MiB，自包含，不依赖 LM Studio
@@ -518,6 +587,7 @@ local LLM/
 |---|---|
 | `fetch_runtime.py` | 克隆后恢复 `runtime/`（那些二进制不入库）|
 | `check_deps.py` | 依赖自检 |
+| `check_syntax.py` | 语法检查 + **包导入冒烟**（抓相对导入写错层级）|
 
 **看模型**
 
@@ -552,6 +622,8 @@ local LLM/
 |---|---|
 | `diag_sse.py` | 打印流式响应原始片段（确认 `reasoning_content` 等字段）|
 | `diag_usage.py` | 对比 usage / timings / metrics 三种取数口径 |
+| `diag_http.py` | **本机 httpx / urllib 对比**（定位系统代理拦截，见排障）|
+| `diag_health.py` | 后端 `/health` 的 httpx vs urllib 实况对比 |
 | `client_example.py` | 调用示例（SDK / 原生 HTTP / 流式）|
 
 > 诊断脚本**不自己启动后端**，直接打一个已经在跑的服务，默认 `http://127.0.0.1:8000`，

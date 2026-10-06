@@ -36,7 +36,7 @@ def main() -> int:
 
     # 先确认服务在跑，否则报错信息会很晦涩
     try:
-        health = httpx.get(f"{base}/health", timeout=5)
+        health = httpx.get(f"{base}/health", timeout=5, trust_env=False)
         print(f"健康检查 {health.status_code}: {health.text[:200]}")
     except httpx.HTTPError as exc:
         print(f"连不上 {base}：{exc}", file=sys.stderr)
@@ -52,7 +52,7 @@ def main() -> int:
         "stream": True,
     }
 
-    with httpx.Client(timeout=300) as client:
+    with httpx.Client(timeout=300, trust_env=False) as client:
         print("=== 逐行看（SSE 事件边界）===")
         with client.stream("POST", f"{base}/v1/chat/completions",
                            json=payload, headers=headers) as resp:

@@ -142,7 +142,7 @@ def main() -> int:
     headers = {"Authorization": f"Bearer {args.api_key}"} if args.api_key else {}
 
     try:
-        health = httpx.get(f"{base}/health", timeout=5)
+        health = httpx.get(f"{base}/health", timeout=5, trust_env=False)
         print(f"健康检查 {health.status_code}: {health.text[:160]}\n")
     except httpx.HTTPError as exc:
         print(f"连不上 {base}：{exc}")
@@ -150,7 +150,7 @@ def main() -> int:
         return 2
 
     prompt = build_prompt(args.prompt_tokens)
-    with httpx.Client(timeout=900, headers=headers) as client:
+    with httpx.Client(timeout=900, headers=headers, trust_env=False) as client:
         # 预热：第一次请求包含 CUDA 图捕获等一次性开销，不计入
         client.post(
             f"{base}/v1/chat/completions",

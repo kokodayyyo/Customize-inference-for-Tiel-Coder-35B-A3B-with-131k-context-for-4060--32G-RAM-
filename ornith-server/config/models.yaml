@@ -1,0 +1,87 @@
+# 多模型注册表
+# ============================================================
+# 网页界面会扫描下面的 search_roots，把找到的 GGUF 列出来；
+# 每个模型匹配到一条 profile 后，点一下就用**这套调好的参数**启动后端。
+#
+# 匹配规则（按优先级）：
+#   1. profile.path   与模型**完整路径**相同（忽略大小写与斜杠方向）
+#   2. profile.match  与**文件名（不含 .gguf）完全相同**
+#   3. profile.match  作为**子串**出现在文件名里
+# 都没匹配上就用 default_profile。
+#
+# settings 里的键名与 config/server.yaml 完全一致，只是按模型覆盖。
+# ============================================================
+
+# 扫描哪些目录找模型（递归）
+search_roots:
+  - "D:/models"
+
+# 扫描时忽略的目录名片段（避免翻进缓存/回收站之类）
+ignore_dirs:
+  - ".cache"
+  - "$RECYCLE.BIN"
+  - "System Volume Information"
+
+# 找不到匹配 profile 时用的兜底参数（保守，保证能起来）
+default_profile:
+  label: "未标定模型"
+  note: "没有匹配到已调优的 profile，使用保守默认值。建议跑 scripts/moe_sweep.py 标定后写进配置。"
+  settings:
+    context_size: 32768
+    cpu_moe: true
+    n_cpu_moe: -1
+    ubatch_size: 1024
+    batch_size: 4096
+    kv_cache_type_k: "q8_0"
+    kv_cache_type_v: "q8_0"
+    kv_offload: true
+    load_mode: "none"
+    threads: 16
+    gpu_layers: 99
+
+profiles:
+
+  # ----------------------------------------------------------
+  # Tile-35B-A3B 基准版（IQ4_XS，16.9 GiB，带 MTP 头）
+  # 实测：decode 29.2 tok/s / prefill 1049 tok/s @ 128K，显存 4.4 GiB
+  # ----------------------------------------------------------
+  - match: "Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS"
+    label: "Tile 35B-A3B 基准版"
+    note: "IQ4_XS / 16.9 GiB / 128K。质量更好，速度略低。含 0.36 GiB 被忽略的 MTP 头。"
+    settings:
+      model_alias: "tile-35b-a3b"
+      context_size: 131072      # 128K：KV q8_0 需 1.33 GiB
+      cpu_moe: true             # 专家 14.12 GiB 放内存
+      n_cpu_moe: -1             # 想再快 6% 可设 36（须保持 ubatch 2048）
+      ubatch_size: 2048
+      batch_size: 8192
+      kv_cache_type_k: "q8_0"
+      kv_cache_type_v: "q8_0"
+      kv_offload: true
+      load_mode: "none"
+      threads: 16
+      gpu_layers: 99
+      # mmproj_path: "D:/models/Tile/Tile-35BA3B/mmproj-BF16.gguf"
+
+  # ----------------------------------------------------------
+  # Tile-35B-A3B APEX（13.7 GiB，无 MTP 头，40 层）
+  # 实测：decode 38.1 tok/s / prefill 1153 tok/s @ 200K，显存 5.0 GiB
+  # 体积小 19%、速度快 30%，代价是量化更低（Q3_K / IQ3_XXS）
+  # ----------------------------------------------------------
+  - match: "Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1"
+    label: "Tile 35B-A3B APEX"
+    note: "Q3_K+IQ3_XXS / 13.7 GiB / 200K。更快更省，质量低于基准版。"
+    settings:
+      model_alias: "tile-35b-a3b-apex"
+      context_size: 204800      # 200K：KV q8_0 仅 2.03 GiB（10 个全注意力层）
+      cpu_moe: true             # 专家 12.19 GiB 放内存
+      n_cpu_moe: -1             # 显存还有约 1.4 GiB 余量，可试 36（+6%）
+      ubatch_size: 2048
+      batch_size: 8192
+      kv_cache_type_k: "q8_0"
+      kv_cache_type_v: "q8_0"
+      kv_offload: true
+      load_mode: "none"
+      threads: 16
+      gpu_layers: 99
+      # mmproj_path: "D:/models/Tile/Tile-35BA3B apex/mmproj-Q8_0.gguf"

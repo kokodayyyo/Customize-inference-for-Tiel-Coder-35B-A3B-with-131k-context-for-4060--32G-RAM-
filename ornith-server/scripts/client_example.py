@@ -119,7 +119,7 @@ def chat_raw(base_url: str, api_key: str) -> None:
     ttft = None
     thinking = False
     printed_header = False
-    with httpx.Client(timeout=300) as client:
+    with httpx.Client(timeout=300, trust_env=False) as client:
         with client.stream("POST", f"{base_url}/chat/completions", json=payload, headers=headers) as resp:
             if resp.status_code >= 400:
                 print(f"[错误 {resp.status_code}] {resp.read().decode('utf-8', 'replace')}")
@@ -158,7 +158,7 @@ def embeddings(base_url: str, api_key: str) -> None:
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     print("--- /v1/embeddings ---")
-    with httpx.Client(timeout=120) as client:
+    with httpx.Client(timeout=120, trust_env=False) as client:
         resp = client.post(
             f"{base_url}/embeddings",
             json={"model": "tile-35b-a3b", "input": ["测试文本"]},
@@ -175,7 +175,7 @@ def embeddings(base_url: str, api_key: str) -> None:
 def health(base_url: str, api_key: str) -> None:
     root = base_url.rsplit("/v1", 1)[0]
     print("--- 健康检查 ---")
-    with httpx.Client(timeout=30) as client:
+    with httpx.Client(timeout=30, trust_env=False) as client:
         for path in ("/health", "/stats"):
             try:
                 resp = client.get(root + path)

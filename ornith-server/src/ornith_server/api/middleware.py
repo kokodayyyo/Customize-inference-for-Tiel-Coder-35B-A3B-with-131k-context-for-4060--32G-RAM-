@@ -52,6 +52,9 @@ log = logging.getLogger("ornith.gateway")
 PUBLIC_PATHS = {
     "/", "/health", "/healthz", "/stats", "/metrics",
     "/v1/models", "/docs", "/redoc", "/openapi.json",
+    # 控制台的**页面外壳**开放（它本身不含任何数据），但 /admin/* 数据接口
+    # 仍需鉴权 —— 那些接口能启停进程。页面会提示输入 API Key 并随请求带上。
+    "/ui", "/admin",
 }
 
 

@@ -2,11 +2,14 @@
 # 所有字段都可以用环境变量 ORNITH_<字段名大写> 覆盖，命令行参数优先级最高。
 
 # ---------------- 模型 ----------------
-model_path: "D:/models/Tile/Tile-35BA3B/Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.gguf"
-model_alias: "tile-35b-a3b"
-# 该目录下另有 mmproj-BF16.gguf（0.84 GiB 视觉投影）。启用视觉会额外占显存，
+# 这里填的是**服务首次启动时**加载的模型。
+# 换模型不用改这里 —— 打开网页控制台 http://127.0.0.1:8000/ui 点一下即可，
+# 每个模型的调优参数在 config/models.yaml 里。
+model_path: "D:/models/Tile/Tile-35BA3B apex/Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1.gguf"
+model_alias: "tile-35b-a3b-apex"
+# 该目录下另有 mmproj-Q8_0.gguf（0.57 GiB 视觉投影）。启用视觉会额外占显存，
 # 需要时取消下一行注释。
-# mmproj_path: "D:/models/Tile/Tile-35BA3B/mmproj-BF16.gguf"
+# mmproj_path: "D:/models/Tile/Tile-35BA3B apex/mmproj-Q8_0.gguf"
 
 # ---------------- llama.cpp 后端 ----------------
 # 留空 = 优先使用项目自带的 runtime/llama.cpp/backends（已从 LM Studio 复制，
@@ -35,7 +38,7 @@ tensor_overrides: []
 
 # ---------------- 显存与上下文（RTX 4060 Laptop 8GB 实测标定）----------------
 gpu_layers: 99            # 99 = 非专家层全部卸载到 GPU
-context_size: 131072      # 128K 上下文
+context_size: 204800      # 200K 上下文（apex 版：KV q8_0 仅 2.08 GiB）
 parallel_slots: 1         # 并发槽位；每槽上下文 = context_size / parallel_slots
 
 # ubatch 是 MoE 下最重要的性能参数：每个 ubatch 都要把 256 个专家全过一遍，

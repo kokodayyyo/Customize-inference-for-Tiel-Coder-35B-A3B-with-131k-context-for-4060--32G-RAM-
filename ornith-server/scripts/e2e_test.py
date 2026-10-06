@@ -71,7 +71,7 @@ def main() -> int:
     thread.start()
 
     # 等待服务可用（模型加载需要几秒）
-    root = httpx.Client(timeout=30)
+    root = httpx.Client(timeout=30, trust_env=False)
     started = time.time()
     ready = False
     while time.time() - started < 300:

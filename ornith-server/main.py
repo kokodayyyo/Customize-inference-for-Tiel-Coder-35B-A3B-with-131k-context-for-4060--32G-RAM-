@@ -127,7 +127,9 @@ def _refuse_if_already_running(cfg: ServerConfig) -> int | None:
     url = f"http://127.0.0.1:{cfg.proxy_port}/health"
     data = None
     try:
-        resp = httpx.get(url, timeout=3.0)
+        # trust_env=False：本机若有系统代理（Clash/v2ray 之类），httpx 默认会
+        # 把 127.0.0.1 的请求也发给代理并拿到 502，这里会被误判成"连不上"。
+        resp = httpx.get(url, timeout=3.0, trust_env=False)
         data = resp.json()
     except (httpx.HTTPError, ValueError):
         data = None
@@ -261,7 +263,7 @@ def cmd_chat(args: argparse.Namespace) -> int:
 
     print(f"模型 {cfg.model_alias} 已就绪，输入内容开始对话（exit 退出，/clear 清空历史）")
     try:
-        with httpx.Client(timeout=cfg.request_timeout) as client:
+        with httpx.Client(timeout=cfg.request_timeout, trust_env=False) as client:
             while True:
                 try:
                     user = input("\n你 > ").strip()

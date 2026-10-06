@@ -405,7 +405,9 @@ class LlamaBackendServer:
                 return "fatal", f"退出码 {code}\n{tail}"
 
             try:
-                with httpx.Client(timeout=2.0) as client:
+                # trust_env=False：不能把健康检查发给系统代理（会拿到 502 并
+                # 一直轮询到超时）。详见 ornith_server/net.py。
+                with httpx.Client(timeout=2.0, trust_env=False) as client:
                     resp = client.get(health_url)
                 if resp.status_code == 200:
                     body = resp.json() if resp.content else {}
@@ -437,7 +439,7 @@ class LlamaBackendServer:
             if not self.is_running:
                 return False
             try:
-                with httpx.Client(timeout=2.0) as client:
+                with httpx.Client(timeout=2.0, trust_env=False) as client:
                     resp = client.get(f"{self.cfg.backend_base_url}/health")
                 if resp.status_code == 200:
                     return True

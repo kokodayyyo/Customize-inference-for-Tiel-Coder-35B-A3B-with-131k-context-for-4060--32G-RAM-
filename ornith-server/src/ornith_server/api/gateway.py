@@ -25,9 +25,17 @@ from typing import Any, AsyncIterator
 import httpx
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from ..config import ServerConfig, local_ip_addresses
 from ..core import LlamaBackendServer, make_backend, query_gpus
+from .admin import ModelManager, create_admin_router
 from .metrics import METRICS
 from .middleware import (
     ConcurrencyLimiter,
@@ -58,18 +66,24 @@ STREAM_DISABLED_PATHS = {"/v1/embeddings"}
 class BackendProxy:
     """把请求转发给 llama-server，并原样（含 SSE 流）返回响应。"""
 
-    def __init__(self, cfg: ServerConfig, backend=None) -> None:
+    def __init__(self, cfg: ServerConfig, backend=None, manager=None) -> None:
         self.cfg = cfg
         self.client: httpx.AsyncClient | None = None
         self.limiter = ConcurrencyLimiter(cfg.parallel_slots, cfg.max_queue)
         # 仅用于在转发失败时判断后端进程是否还活着，给出可诊断的错误信息
         self.backend = backend
+        # 换模型期间用它提前拦住请求并返回"正在加载"
+        self.manager = manager
 
     async def open(self) -> None:
+        # trust_env=False：本地回环流量绝不能走系统代理。
+        # 本机若有 Clash/v2ray 之类的系统代理，httpx 默认会把 127.0.0.1 的
+        # 请求也发给代理并拿到 502，整个转发链路都会挂。详见 net.py。
         self.client = httpx.AsyncClient(
             base_url=self.cfg.backend_base_url,
             timeout=httpx.Timeout(self.cfg.request_timeout, connect=10.0),
             limits=httpx.Limits(max_connections=64, max_keepalive_connections=16),
+            trust_env=False,
         )
 
     async def close(self) -> None:
@@ -105,6 +119,18 @@ class BackendProxy:
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
         headers = self._forward_headers(request)
+
+        # 换模型期间后端是停着的，这时明确告诉调用方"正在加载"，
+        # 比让它去连一个已经关闭的端口、拿到含义模糊的 502 要好得多。
+        mgr = getattr(self, "manager", None)
+        if mgr is not None and mgr.state == "loading":
+            return error_response(
+                f"模型正在加载，请稍候重试（{mgr.message}）", "model_loading", 503
+            )
+        if mgr is not None and mgr.state == "idle":
+            return error_response(
+                "当前没有模型在运行，请到控制台 /ui 启动一个", "no_model", 503
+            )
 
         await self.limiter.acquire()
         started = time.perf_counter()
@@ -301,9 +327,13 @@ def create_app(cfg: ServerConfig, backend_server: LlamaBackendServer | None = No
         datefmt="%H:%M:%S",
     )
 
+    # 模型管理器：拥有后端进程，并支持在网页控制台上"点一下换模型"
+    manager = ModelManager(cfg, backend_server)
+
     state: dict[str, Any] = {
         "backend": backend_server,
-        "proxy": BackendProxy(cfg, backend_server),
+        "proxy": BackendProxy(cfg, backend_server, manager),
+        "manager": manager,
         "ready": False,
         "load_error": "",
     }
@@ -314,19 +344,10 @@ def create_app(cfg: ServerConfig, backend_server: LlamaBackendServer | None = No
         backend: LlamaBackendServer | None = state["backend"]
 
         if backend is not None and cfg.autostart_backend:
-            if not backend.is_running:
-                try:
-                    profile = backend.start()
-                    log.info(
-                        "后端已加载：ctx=%d 每槽上下文=%d ubatch=%d ngl=%d kv=%s(%s) %s",
-                        profile.context_size, cfg.ctx_per_slot, profile.ubatch_size,
-                        profile.gpu_layers, profile.kv_type, profile.kv_location,
-                        profile.moe_location,
-                    )
-                except Exception as exc:  # noqa: BLE001 - 启动失败要保留服务以暴露错误
-                    state["load_error"] = str(exc)
-                    log.error("后端启动失败：%s", exc)
-            state["ready"] = backend.is_running
+            # 首次启动是同步的：必须等模型就绪，横幅里的信息才准确
+            state["ready"] = manager.start_sync()
+            if not state["ready"]:
+                state["load_error"] = manager.message
 
         await proxy.open()
         _print_banner(cfg, backend, bool(state["ready"]))
@@ -355,6 +376,9 @@ def create_app(cfg: ServerConfig, backend_server: LlamaBackendServer | None = No
         )
     app.add_middleware(MetricsMiddleware, cfg=cfg)
 
+    # 模型管理接口 + 网页控制台（/ui、/admin/*）
+    app.include_router(create_admin_router(manager))
+
     proxy: BackendProxy = state["proxy"]
 
     # ------------------------------------------------------------------
@@ -370,12 +394,16 @@ def create_app(cfg: ServerConfig, backend_server: LlamaBackendServer | None = No
     # 运维端点
     # ------------------------------------------------------------------
     @app.get("/", include_in_schema=False)
-    async def root() -> dict[str, Any]:
+    async def root(request: Request):
+        """浏览器访问就给控制台页面，脚本访问（Accept 不含 text/html）给 JSON。"""
+        if "text/html" in request.headers.get("accept", ""):
+            return RedirectResponse("/ui", status_code=307)
         return {
             "service": "ornith-lan-api",
             "status": "ok" if state["ready"] else "starting",
             "model": cfg.model_alias,
             "endpoints": ["/v1/chat/completions", "/v1/completions", "/v1/models", "/v1/embeddings"],
+            "console": "/ui",
             "auth_required": bool(cfg.api_key),
             "docs": "/docs",
         }
@@ -384,12 +412,18 @@ def create_app(cfg: ServerConfig, backend_server: LlamaBackendServer | None = No
     @app.get("/healthz", include_in_schema=False)
     async def health() -> JSONResponse:
         backend: LlamaBackendServer | None = state["backend"]
+        mgr: ModelManager = state["manager"]
+        # ready 以管理器为准：换模型期间后端会被停掉，此时必须报 not ready，
+        # 否则调用方会在加载窗口期收到一堆难以理解的 502。
+        ready = mgr.state == "running" and bool(backend and backend.is_running)
         payload: dict[str, Any] = {
             "gateway": "ok",
             "backend_running": bool(backend and backend.is_running),
-            "ready": bool(state["ready"]),
+            "ready": ready,
+            "state": mgr.state,
+            "model": cfg.model_alias,
             "pid": backend.pid if backend else None,
-            "load_error": state["load_error"],
+            "load_error": mgr.message if mgr.state == "error" else state["load_error"],
         }
         if backend and backend.profile:
             payload["context_size"] = backend.profile.context_size
@@ -399,7 +433,7 @@ def create_app(cfg: ServerConfig, backend_server: LlamaBackendServer | None = No
             payload["gpu"] = [
                 {"name": g.name, "total_gib": g.total_gib, "free_gib": g.free_gib} for g in gpus
             ]
-        code = 200 if state["ready"] else 503
+        code = 200 if ready else 503
         return JSONResponse(payload, status_code=code)
 
     @app.get("/stats", include_in_schema=False)
@@ -467,6 +501,7 @@ def _print_banner(cfg: ServerConfig, backend: LlamaBackendServer | None, ready: 
         lines.append(f"  专家权重  : {p.moe_location}")
         lines.append(f"  加载说明  : {p.note}")
     lines.append(f"  后端状态  : {'运行中' if ready else '未就绪'}")
+    lines.append(f"  **控制台** : http://127.0.0.1:{cfg.proxy_port}/ui   ← 换模型 / 看状态")
     lines.append(f"  本机访问  : http://127.0.0.1:{cfg.proxy_port}/v1")
     for ip in local_ip_addresses():
         lines.append(f"  内网访问  : http://{ip}:{cfg.proxy_port}/v1")

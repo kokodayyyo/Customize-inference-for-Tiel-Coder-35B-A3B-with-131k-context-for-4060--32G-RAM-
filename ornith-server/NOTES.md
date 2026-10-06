@@ -380,6 +380,49 @@ Windows 上父进程终止不会结束子进程。`core/jobobject.py` 用 Job Ob
 会话开始时工作区 `D:\personal\AI_output\local LLM` 缺少 `WRITE_OWNER`，导致任何
 命令都失败。已通过 `diagnose-windows-sandbox-acl` 修复。
 
+### 6.4 ⚠ 系统代理会拦掉 httpx 发往 127.0.0.1 的请求（真实踩坑记录）
+
+网页控制台上线后出现一个很诡异的现象：
+
+* PowerShell `Invoke-RestMethod http://127.0.0.1:8080/health` → **200 `{"status":"ok"}`**
+* 浏览器打得开控制台
+* 但 Python 里 `server.start()` 的健康检查轮询**整整 300 秒都看不到 200**，
+  最后超时降级；网关进程 CPU 烧到 75%，端口 8000 一直不监听
+
+用 `scripts/diag_http.py` 在同一个 URL、同一时刻对比，一次就定位了：
+
+```
+httpx 默认(trust_env=True)          : HTTP 502   (3570ms)
+httpx trust_env=False             : HTTP 200   (1188ms)
+urllib                            : HTTP 200   (39ms)
+httpx.AsyncClient 默认              : HTTP 502   (3870ms)
+```
+
+**原因**：机器上装了 Clash / v2ray 之类的系统代理（WinINET 里设成
+`127.0.0.1:7897`）。httpx 的 `trust_env=True` 会通过
+`urllib.request.getproxies()` **从 Windows 注册表**读到它 —— 不只是环境变量 ——
+然后把发往 `127.0.0.1` 的请求也丢给代理，代理返回 502。
+
+而 PowerShell、浏览器、`urllib` 都会遵守 Windows 的"绕过本地地址"
+（ProxyOverride 里的 `<local>`），所以症状表现为"**只有 Python 连不上本机服务**"。
+
+**影响面**：不只是健康检查。网关照样子用 httpx 转发给 llama-server，
+等于**整个 API 全部 502**。而且 `server.start()` 会空转 300 秒才降级，
+表面上像"模型加载失败"。
+
+**修复**：项目内所有访问 llama-server（127.0.0.1）的 httpx 客户端统一加
+`trust_env=False`，收口在 `src/ornith_server/net.py`：
+
+```python
+from ..net import local_client, local_async_client
+```
+
+本地回环流量永远不该走代理。
+
+**教训**：`httpx` 的 `trust_env` 读的是**系统**代理配置，不只环境变量。
+凡是访问本机服务的客户端都应显式关闭它 —— 这类问题在装了代理客户端的
+开发机上极易出现，且症状会误导成"服务没起来"。
+
 ---
 
 ## 7. 诊断脚本
@@ -394,6 +437,8 @@ Windows 上父进程终止不会结束子进程。`core/jobobject.py` 用 Job Ob
 | `scripts/sysinfo.py` | 内存与磁盘（不依赖 WMI，避免权限问题）|
 | `scripts/diag_sse.py` | 打印流式响应原始片段（靠它发现 `reasoning_content`）|
 | `scripts/diag_usage.py` | 对比流式/非流式/`/metrics` 三种取数方式 |
+| `scripts/diag_http.py` | **对比 httpx / urllib 访问本机服务**（定位系统代理拦截）|
+| `scripts/diag_health.py` | 后端 /health 的 httpx vs urllib 实况对比 |
 | `scripts/fetch_runtime.py` | 克隆后恢复 `runtime/`（那些二进制不入库）|
 
 > 两个诊断脚本**不自己启动后端**，直接打一个已经在跑的服务（默认

@@ -181,7 +181,7 @@ def run_benchmark(
 
     results: list[BenchResult] = []
     try:
-        with httpx.Client(timeout=cfg.request_timeout) as client:
+        with httpx.Client(timeout=cfg.request_timeout, trust_env=False) as client:
             if warmup:
                 if verbose:
                     print("预热中（首次推理会包含 CUDA 图捕获开销）…")
