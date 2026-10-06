@@ -88,6 +88,7 @@
   .big small{font-size:12.5px;color:var(--dim);font-weight:400;margin-left:4px}
   .sub{font-size:12px;color:var(--dim);margin-top:4px}
   .g{color:var(--accent)} .b{color:var(--accent2)} .w{color:var(--warn)} .e{color:var(--err)}
+  .dim{color:var(--fg);opacity:.45}
   .meter{height:7px;border-radius:4px;background:#242c35;overflow:hidden;margin:9px 0 5px}
   .meter>i{display:block;height:100%;border-radius:4px;background:var(--accent2);
            transition:width .4s ease}
@@ -255,18 +256,23 @@ function renderDash(m){
   $('dash-updated').textContent = '· ' + new Date((m.ts||0)*1000).toLocaleTimeString();
 
   /* --- 1. 实时吞吐 --- */
+  // 两次采样之间没有请求时，增量算不出速度。这时回落到累计均值并标注，
+  // 避免数字在 "37.2" 和 "—" 之间来回闪。
+  const decLive = live.decode_tps, preLive = live.prefill_tps;
+  const decVal = decLive ?? avg.decode_tps, preVal = preLive ?? avg.prefill_tps;
+  const decDim = decLive == null, preDim = preLive == null;
   const speedTile = `
     <div style="display:flex;gap:24px;flex-wrap:wrap">
-      <div><div class="sub">decode</div>
-        <div class="big g">${n(live.decode_tps,2)}<small>tok/s</small></div></div>
-      <div><div class="sub">prefill</div>
-        <div class="big b">${n(live.prefill_tps,1)}<small>tok/s</small></div></div>
+      <div><div class="sub">decode ${decDim?'（空闲，显示均值）':''}</div>
+        <div class="big ${decDim?'dim':'g'}">${n(decVal,2)}<small>tok/s</small></div></div>
+      <div><div class="sub">prefill ${preDim?'（空闲，显示均值）':''}</div>
+        <div class="big ${preDim?'dim':'b'}">${n(preVal,1)}<small>tok/s</small></div></div>
     </div>
     <canvas id="chart" width="600" height="96" style="margin-top:8px"></canvas>
     <div class="legend">
       <span><i style="background:var(--accent)"></i>decode</span>
       <span><i style="background:var(--accent2)"></i>prefill（右轴同比例）</span>
-      <span style="margin-left:auto">累计均值 decode ${n(avg.decode_tps,2)} / prefill ${n(avg.prefill_tps,1)}</span>
+      <span style="margin-left:auto">有请求时显示实时值，空闲回落到均值</span>
     </div>`;
 
   /* --- 2. GPU --- */
