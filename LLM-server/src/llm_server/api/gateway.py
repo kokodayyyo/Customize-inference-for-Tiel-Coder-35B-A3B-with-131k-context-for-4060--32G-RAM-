@@ -410,7 +410,9 @@ def create_app(cfg: ServerConfig, backend_server: LlamaBackendServer | None = No
 
     @app.get("/health")
     @app.get("/healthz", include_in_schema=False)
-    async def health() -> JSONResponse:
+    def health() -> JSONResponse:
+        # 同步 def：query_gpus() 会拉起 nvidia-smi 子进程，跑在线程池里，
+        # 不阻塞事件循环（否则健康检查会卡住正在流式转发的 /v1 请求）。
         backend: LlamaBackendServer | None = state["backend"]
         mgr: ModelManager = state["manager"]
         # ready 以管理器为准：换模型期间后端会被停掉，此时必须报 not ready，

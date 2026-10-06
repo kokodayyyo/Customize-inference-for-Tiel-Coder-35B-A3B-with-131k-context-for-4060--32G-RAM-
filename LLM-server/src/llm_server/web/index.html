@@ -114,7 +114,7 @@
     <button id="btn-rescan">重新扫描</button>
     <button id="btn-key">API Key</button>
     <button id="btn-stop" class="danger">停止服务</button>
-    <a href="/docs" target="_blank"><button>API 文档</button></a>
+    <a href="/docs" target="_blank" rel="noopener noreferrer"><button>API 文档</button></a>
   </header>
 
   <div class="panel">
@@ -174,6 +174,7 @@ const $ = id => document.getElementById(id);
 let MODELS = [];
 let STATUS = {};
 let pollTimer = null;
+let polling = false;
 
 /* ---------- API Key（服务端启用鉴权时用） ---------- */
 function getKey(){ return localStorage.getItem('llm_api_key') || ''; }
@@ -276,7 +277,7 @@ function renderDash(m){
     <canvas id="chart" width="600" height="96" style="margin-top:8px"></canvas>
     <div class="legend">
       <span><i style="background:var(--accent)"></i>decode</span>
-      <span><i style="background:var(--accent2)"></i>prefill（右轴同比例）</span>
+      <span><i style="background:var(--accent2)"></i>prefill（同一坐标轴）</span>
       <span style="margin-left:auto">有请求时显示实时值，空闲回落到均值</span>
     </div>`;
 
@@ -442,7 +443,7 @@ function renderStatus(){
   $('s-load').textContent = STATUS.load_mode || '—';
   $('s-up').textContent = fmtUptime(STATUS.uptime_s);
   const g = (STATUS.gpus||[])[0];
-  $('s-vram').innerHTML = g ? `${g.free_gib.toFixed(2)} <small>/ ${g.total_gib} GiB</small>` : '—';
+  $('s-vram').innerHTML = g ? `${n(g.free_gib,2)} <small>/ ${n(g.total_gib,2)} GiB</small>` : '—';
   $('cmdline').textContent = STATUS.command || '—';
 
   const busy = !!STATUS.busy;
@@ -551,8 +552,18 @@ $('btn-copy').onclick = () => {
   await fetchStatus();
   await fetchMetrics();
   pollTimer = setInterval(async () => {
-    await fetchStatus();
-    await fetchMetrics();
+    // 上一轮没跑完（例如后端在忙）或页面在后台时跳过这一拍，避免请求堆叠；
+    // 堆叠会让 /admin/metrics 的采样交错，算出荒谬的实时速度。
+    if(polling || document.hidden) return;
+    polling = true;
+    try{
+      await fetchStatus();
+      await fetchMetrics();
+    }catch(e){
+      console.error('轮询失败：', e);
+    }finally{
+      polling = false;
+    }
   }, 2000);
 })();
 </script>

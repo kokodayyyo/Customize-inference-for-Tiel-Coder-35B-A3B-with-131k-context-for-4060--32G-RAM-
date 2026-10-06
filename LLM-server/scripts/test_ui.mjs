@@ -141,6 +141,30 @@ const SAMPLE = {
   ],
 };
 
+// /admin/status 的样例（renderStatus 的输入）
+const SAMPLE_STATUS = {
+  state: "running", message: "", busy: false,
+  active_path: "D:\\models\\x.gguf", alias: "tile-35b-a3b-apex",
+  context_size: 204800, ubatch: 2048, kv_type: "q8_0", kv_location: "显存",
+  moe_location: "内存", load_mode: "none", load_seconds: 10.6, uptime_s: 3725,
+  pid: 30868, command: "llama-server --model D:\\models\\x.gguf --ctx-size 204800",
+  log_path: "D:\\logs\\llama.log",
+  gpus: [{ name: "NVIDIA GeForce RTX 4060 Laptop GPU", total_gib: 8, free_gib: 1.69 }],
+  changed_fields: [], registry_error: "",
+};
+
+// /admin/models 的样例（renderModels 的输入）
+const SAMPLE_MODELS = [{
+  path: "D:\\models\\x.gguf", name: "Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1.gguf",
+  stem: "Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1", size_gib: 13.74,
+  is_projector: false, label: "Tile 35B-A3B APEX", note: "Q3_K+IQ3_XXS / 200K",
+  alias: "tile-35b-a3b-apex", matched: true, shape: "256 专家/激活 8 · 10/40 层全注意力",
+  context_max: 204800, active: false, error: "",
+  estimate: { context: 204800, resident_gib: 2.38, experts_ram_gib: 12.19, experts_vram_gib: 0,
+              kv_gib: 2.03, buffer_gib: 0.61, vram_total_gib: 5.02, measured: true },
+  measured: { vram_gib: 5.02, decode_tps: 30.5, prefill_tps: 1137 },
+}];
+
 /* ---------------- 取出并执行页面脚本 ---------------- */
 const html = readFileSync(HTML, "utf8");
 const m = html.match(/<script>([\s\S]*?)<\/script>/);
@@ -171,8 +195,11 @@ const sandbox = {
       if (path.includes("/admin/metrics")) {
         return { status: 200, ok: true, json: async () => SAMPLE };
       }
+      if (path.includes("/admin/status")) {
+        return { status: 200, ok: true, json: async () => SAMPLE_STATUS };
+      }
       if (path.includes("/admin/models")) {
-        return { status: 200, ok: true, json: async () => ({ search_roots: ["D:/models"], models: [], projectors: [] }) };
+        return { status: 200, ok: true, json: async () => ({ search_roots: ["D:/models"], models: SAMPLE_MODELS, projectors: [] }) };
       }
       return { status: 200, ok: true, json: async () => ({}) };
     }
@@ -185,7 +212,7 @@ const sandbox = {
 console.log(OFFLINE ? "=== 离线模式（内置样例数据）===" : `=== 在线模式（真实服务 ${BASE}）===`);
 let runError = null;
 try {
-  const fn = new Function(...Object.keys(sandbox), `${js}\n;return {renderDash, drawChart, renderModels, renderStatus, fmtUptime, n};`);
+  const fn = new Function(...Object.keys(sandbox), `${js}\n;return {renderDash, drawChart, renderModels, renderStatus, fetchStatus, fetchModels, fmtUptime, n};`);
   var api = fn(...Object.values(sandbox));
 } catch (e) {
   runError = e;
@@ -250,6 +277,33 @@ if (!runError) {
     renderError = e;
   }
   check("后端未运行也不崩", offlineOk, offlineOk ? "" : String(renderError));
+
+  /* renderStatus / renderModels：这两个函数从服务端数据拼 innerHTML，是最容易
+     因为一个字段是 null 而抛异常、白屏或中断整轮轮询的地方，之前没有运行时覆盖。 */
+  let statusErr = null;
+  try {
+    await api.fetchStatus(); // 内部会调用 renderStatus()
+  } catch (e) {
+    statusErr = e;
+  }
+  check("fetchStatus/renderStatus 不抛异常", !statusErr, statusErr ? String(statusErr) : "");
+
+  let modelsErr = null;
+  try {
+    await api.fetchModels(); // 内部会调用 renderModels()
+  } catch (e) {
+    modelsErr = e;
+  }
+  check("fetchModels/renderModels 不抛异常", !modelsErr, modelsErr ? String(modelsErr) : "");
+
+  if (OFFLINE) {
+    check("状态栏显示模型名",
+          (elements.get("s-model")?.textContent || "").includes("tile-35b"),
+          elements.get("s-model")?.textContent);
+    check("状态栏按 GiB 格式化显存",
+          (elements.get("s-vram")?.innerHTML || "").includes("1.69"),
+          elements.get("s-vram")?.innerHTML);
+  }
 }
 
 console.log(`\n${"=".repeat(60)}`);

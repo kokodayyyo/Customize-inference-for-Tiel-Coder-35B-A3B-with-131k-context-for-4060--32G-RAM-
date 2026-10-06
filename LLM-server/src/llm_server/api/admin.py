@@ -68,6 +68,9 @@ class ModelManager:
         self.load_seconds = 0.0
         self.changed_fields: list[str] = []
         self._lock = threading.Lock()
+        # metrics() 现在跑在线程池里（路由改成了同步 def），可能并发；用它保护
+        # _last_metrics 增量基线，避免两次采样交错算出荒谬的实时速度。
+        self._metrics_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         # 运行时指标采样：CPU 占用需要两次采样，实时吞吐要用累计值做差
         self._samplers = sysinfo.Samplers.create()
@@ -119,6 +122,11 @@ class ModelManager:
     # 运行时指标（网页控制台的数据来源）
     # ------------------------------------------------------------------
     def metrics(self) -> dict[str, Any]:
+        """线程安全入口：串行化采样，避免并发交错污染实时速度基线。"""
+        with self._metrics_lock:
+            return self._collect_metrics()
+
+    def _collect_metrics(self) -> dict[str, Any]:
         """聚合展示用的一切：GPU / 内存 / CPU / 后端吞吐 / KV 占用 / 网关统计。
 
         设计要点：llama.cpp 的 ``/metrics`` 给的是**累计值**，直接用它算平均速度
@@ -379,21 +387,24 @@ def create_admin_router(manager: ModelManager, proxy: Any = None) -> APIRouter:
             data["gateway"]["queue_waiting"] = proxy.limiter.waiting
         return data
 
+    # 这些处理器内部是同步的（nvidia-smi 子进程 + 阻塞式 httpx），所以声明为普通
+    # ``def``：Starlette 会把它们丢到线程池执行，绝不阻塞事件循环。若写成
+    # ``async def`` 而没有 await，采样期间整个网关（含 /v1 流式转发）都会卡住。
     @router.get("/admin/models")
-    async def list_models() -> dict[str, Any]:
+    def list_models() -> dict[str, Any]:
         return manager.list_models()
 
     @router.get("/admin/status")
-    async def status() -> dict[str, Any]:
+    def status() -> dict[str, Any]:
         return manager.status()
 
     @router.get("/admin/metrics")
-    async def metrics() -> dict[str, Any]:
+    def metrics() -> dict[str, Any]:
         """网页控制台的仪表盘数据（GPU / 内存 / CPU / 吞吐 / KV / 网关统计）。"""
         return _metrics()
 
     @router.get("/admin/log", include_in_schema=False)
-    async def log_tail(lines: int = 40) -> dict[str, Any]:
+    def log_tail(lines: int = 40) -> dict[str, Any]:
         return {"log_path": manager.status().get("log_path", ""),
                 "tail": manager.log_tail(max(1, min(lines, 400)))}
 
@@ -410,7 +421,7 @@ def create_admin_router(manager: ModelManager, proxy: Any = None) -> APIRouter:
         return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
     @router.post("/admin/stop")
-    async def stop() -> JSONResponse:
+    def stop() -> JSONResponse:
         result = manager.stop()
         return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
