@@ -28,7 +28,7 @@
 |---|---|---|---|---|
 | **APEX** `...APEX-I-MiniPlus-V2.1` | 13.74 GiB | **200K** | **38.1 tok/s** | 更快更省，量化更低（Q3_K / IQ3_XXS）|
 | **基准版** `...MTP-UD-IQ4_XS` | 16.88 GiB | 128K | 29.2 tok/s | 质量更好（IQ4_XS）|
-| **Gemma-4 26B-A4B** `...StyleTune-V2-QAT-UD-Q4_K_XL` | 13.61 GiB | 170K | 26.9 tok/s | gemma4 MoE，Q4_0 QAT，滑窗注意力 KV 很小 |
+| **Gemma-4 26B-A4B** `...heretic-APEX-Compact` | 14.43 GiB | 150K | 29.3 tok/s | gemma4 MoE，APEX 混合量化，滑窗注意力 KV 很小 |
 
 ---
 
@@ -68,7 +68,7 @@ pip install -r LLM-server\requirements.txt
 |---|---|---|---|
 | `Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1.gguf` | 13.74 GiB | **200K** | **默认**，更快更省 |
 | `Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.gguf` | 16.88 GiB | 128K | 质量更好 |
-| `Gemma-4-26B-A4B-StyleTune-V2-QAT-UD-Q4_K_XL.gguf` | 13.61 GiB | 170K | gemma4 MoE，另一套架构 |
+| `gemma-4-26B-A4B-heretic-APEX-Compact.gguf` | 14.43 GiB | 150K | gemma4 MoE，另一套架构 |
 
 前两个是 **`qwen35moe` 架构**（Qwen3-Next 式：40 个计算层里每 4 层只有 1 层是
 真注意力，其余是线性注意力；256 专家、每 token 激活 8 个）；第三个是 **`gemma4`**

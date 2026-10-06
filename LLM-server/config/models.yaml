@@ -137,33 +137,30 @@ profiles:
       first_token_at_153k_s: 181
 
   # ----------------------------------------------------------
-  # Gemma-4 26B-A4B StyleTune V2（Q4_0 QAT，13.6 GiB，gemma4 架构）
+  # Gemma-4 26B-A4B Heretic APEX（gemma4 架构，14.43 GiB，APEX 混合量化）
+  # 匹配用**家族子串**（Gemma-4-26B-A4B）—— 换同族量化不用改配置。
   #
   # 结构：30 层、MoE 128 专家 / 激活 8（专家 FFN 704）；注意力是**滑窗**
   # （window 1024），每 6 层才 1 层全注意力 —— 30 层里只有 5 层 KV 随上下文
-  # 增长，所以 KV 很小（q8_0 @170K 仅 1.87 GiB）。
+  # 增长，所以 KV 很小（q8_0 @150K 仅 1.66 GiB）。
   #
   # 张量账本（scripts/gguf_tensors.py）：
-  #   专家 *_exps   11.96 GiB -> 内存
-  #   其余权重       1.64 GiB -> 显存
+  #   专家 *_exps   12.88 GiB -> 内存
+  #   其余权重       1.54 GiB -> 显存
   #
-  # 实测（scripts/moe_probe.py，cpu-moe，ubatch 2048，load none）：
-  #   上下文       KV(q8_0)  decode   prefill   显存净增   说明
-  #   128K         1.43 GiB  29.1     1378      4.68 GiB   最从容
-  #   170K（采用） 1.87 GiB  26.9     1378      5.46 GiB   余量约 950 MiB
-  #   200K         2.18 GiB  28.0     1367      5.92 GiB   余量偏小
-  #   256K + q4_0  1.46 GiB  27.8     1368      5.62 GiB   拉满上下文
-  #   256K + q8_0  2.76 GiB  24.4      333      5.92 GiB   ❌ 撞 8 GiB 天花板，prefill 崩
-  #   注：prefill 与上下文基本无关（都是 ~1370），256K+q8_0 掉速纯属显存被挤爆。
+  # 实测（scripts/moe_probe.py，150K，cpu-moe，q8_0 KV，ubatch 2048，load none）：
+  #   decode 29.3 tok/s | prefill 1324 tok/s | 显存净增 5.03 GiB | 进程工作集 14.9 GiB
+  #   注：prefill 与上下文基本无关（都 ~1300~1380）；8 GiB 卡的瓶颈是显存总量，
+  #       大上下文把总量顶到 ~7.9 GiB 就会让 prefill 崩（见 README/NOTES）。
   #       专家已在内存、resident 很小，没有可挪腾的余量，故 n_cpu_moe 保持 -1。
   # ----------------------------------------------------------
-  - match: "Gemma-4-26B-A4B-StyleTune-V2-QAT-UD-Q4_K_XL"
-    label: "Gemma 4 26B-A4B StyleTune"
-    note: "gemma4 MoE / Q4_0 QAT / 13.6 GiB / 170K。专家放内存、注意力+KV 放显存；滑窗注意力使 KV 很小。"
+  - match: "Gemma-4-26B-A4B"
+    label: "Gemma 4 26B-A4B Heretic APEX"
+    note: "gemma4 MoE / APEX 混合量化 / 14.43 GiB / 150K。专家放内存、注意力+KV 放显存；滑窗注意力使 KV 很小。"
     settings:
       model_alias: "gemma-4-26b-a4b"
-      context_size: 174080      # 170K：KV q8_0 仅 1.87 GiB（5 个全注意力层）
-      cpu_moe: true             # 专家 11.96 GiB 放内存
+      context_size: 153600      # 150K：KV q8_0 仅 1.66 GiB（5 个全注意力层）
+      cpu_moe: true             # 专家 12.88 GiB 放内存
       n_cpu_moe: -1             # 显存余量小，不适合再把专家挪上显存
       ubatch_size: 2048
       batch_size: 8192
@@ -175,7 +172,7 @@ profiles:
       gpu_layers: 99
     # **实测**值（scripts/moe_probe.py）。界面优先显示这些。
     measured:
-      vram_gib: 5.46            # 净增 @170K（cpu-moe，5591 MiB）
-      ram_working_set_gib: 14.2
-      decode_tps: 26.9          # 空载
-      prefill_tps: 1378
+      vram_gib: 5.03            # 净增 @150K（cpu-moe，5153 MiB）
+      ram_working_set_gib: 14.9
+      decode_tps: 29.3          # 空载
+      prefill_tps: 1324
