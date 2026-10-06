@@ -113,11 +113,11 @@ start_server.bat    REM ② 起服务 + 控制台（不加载模型，约 1 秒�
 三套参数都写在 `config/models.yaml`，网页上点一下即用。数字是 `scripts/moe_probe.py`
 实测（控制台会标「实测」；以它为准）：
 
-| 模型 | 体积 | 上下文 | decode（空载）| prefill | 显存净增 | 特点 |
-|---|---|---|---|---|---|---|
-| **APEX** `...APEX-I-MiniPlus-V2.1` | 13.74 GiB | **200K** | 30.5 tok/s | 1137 tok/s | 5.02 GiB | 更快更省，量化更低 |
-| **基准版** `...MTP-UD-IQ4_XS` | 16.88 GiB | 128K | 29.2 tok/s | 1049 tok/s | 4.41 GiB | 质量更好 |
-| **Gemma-4 26B-A4B** `...heretic-APEX-Compact` | 14.43 GiB | 150K | 29.3 tok/s | 1324 tok/s | 5.03 GiB | gemma4 MoE，KV 很小 |
+| 模型 | 文件（完整名）| 体积 | 上下文 | decode（空载）| prefill | 显存净增 | 特点 |
+|---|---|---|---|---|---|---|---|
+| Tile 35B-A3B APEX | `Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1.gguf` | 13.74 GiB | **200K** | 30.5 tok/s | 1137 tok/s | 5.02 GiB | 更快更省，量化更低 |
+| Tile 35B-A3B 基准版 | `Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.gguf` | 16.88 GiB | 128K | 29.2 tok/s | 1049 tok/s | 4.41 GiB | 质量更好 |
+| Gemma 4 26B-A4B Heretic APEX | `gemma-4-26B-A4B-heretic-APEX-Compact.gguf` | 14.43 GiB | 150K | 29.3 tok/s | 1324 tok/s | 5.03 GiB | gemma4 MoE，KV 很小 |
 
 共同的定盘参数：`cpu_moe`（专家放内存）、`ubatch 2048`、KV `q8_0` 放显存、
 `load_mode none`（不用 mmap，快 ~17%）。所有模型都在 **8 GiB 显存**里留了安全余量。
