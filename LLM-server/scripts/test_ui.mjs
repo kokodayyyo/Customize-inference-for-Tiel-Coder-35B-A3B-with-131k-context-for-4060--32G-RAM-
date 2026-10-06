@@ -179,6 +179,27 @@ const SAMPLE_MODELS = [
     vision_supported: false, vision_default: false, mmproj: "",
     estimate: {}, measured: {},
   },
+  {
+    // 手工把 measured 留空 → to_dict 会把 est.vram_total_gib 覆盖成 null；
+    // 旧的 `!== undefined` 判断会在此处 null.toFixed 抛错。
+    path: "D:\\models\\null-est.gguf",
+    name: "null-est.gguf", stem: "null-est", size_gib: 5.0,
+    is_projector: false, label: "空估值模型", note: "", alias: "null-est",
+    matched: true, shape: "40 层", context_max: 32768, active: false, error: "",
+    vision_supported: false, vision_default: false, mmproj: "",
+    estimate: { context: 32768, vram_total_gib: null, kv_gib: null, experts_ram_gib: null,
+                measured: true },
+    measured: { vram_gib: null },
+  },
+  {
+    // 文件名里塞 HTML，验证渲染时被转义（不产生真实标签）
+    path: "D:\\models\\evil<img src=x onerror=alert(1)>.gguf",
+    name: "evil<img src=x onerror=alert(1)>.gguf", stem: "evil", size_gib: 1.0,
+    is_projector: false, label: "evil<b>x</b>", note: "<i>note</i>", alias: "evil",
+    matched: false, shape: "1 层", context_max: 0, active: false, error: "",
+    vision_supported: false, vision_default: false, mmproj: "",
+    estimate: {}, measured: {},
+  },
 ];
 
 /* ---------------- 取出并执行页面脚本 ---------------- */
@@ -228,7 +249,7 @@ const sandbox = {
 console.log(OFFLINE ? "=== 离线模式（内置样例数据）===" : `=== 在线模式（真实服务 ${BASE}）===`);
 let runError = null;
 try {
-  const fn = new Function(...Object.keys(sandbox), `${js}\n;return {renderDash, drawChart, renderModels, renderStatus, fetchStatus, fetchModels, fmtUptime, n};`);
+  const fn = new Function(...Object.keys(sandbox), `${js}\n;return {renderDash, drawChart, renderModels, renderStatus, fetchStatus, fetchModels, fmtUptime, n, esc};`);
   var api = fn(...Object.values(sandbox));
 } catch (e) {
   runError = e;
@@ -335,6 +356,18 @@ if (!runError) {
     const rootsBar = elements.get("roots-bar")?.innerHTML || "";
     check("扫描目录栏显示当前目录", rootsBar.includes("D:/models"), rootsBar);
     check("扫描目录栏有添加按钮", rootsBar.includes("btn-add-root"), "");
+
+    // 空估值（measured 留空 → est 字段为 null）不能把 renderModels 弄崩
+    const nullCard = created.find((e) => (e.dataset.path || "").includes("null-est"));
+    check("null 估值模型卡片已渲染", !!nullCard, "");
+
+    // XSS：文件名/标签里的 HTML 必须被转义
+    check("esc 转义尖括号与引号",
+          api.esc('<a "x">') === '&lt;a &quot;x&quot;&gt;', api.esc('<a "x">'));
+    const evilCard = created.find((e) => (e.dataset.path || "").includes("evil"));
+    const evilHtml = evilCard?._html || "";
+    check("文件名里的 HTML 被转义（无真实 <img>）",
+          !evilHtml.includes("<img") && evilHtml.includes("&lt;img"), "");
   }
 }
 

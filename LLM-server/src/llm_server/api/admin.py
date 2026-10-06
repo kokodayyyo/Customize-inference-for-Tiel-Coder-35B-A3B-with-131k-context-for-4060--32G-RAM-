@@ -23,6 +23,8 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.concurrency import run_in_threadpool
+from urllib.parse import urlsplit
 
 from ..config import ServerConfig
 from ..core import sysinfo
@@ -355,6 +357,9 @@ class ModelManager:
             self.server.profile = None
 
             self.changed_fields = self.registry.apply_to_config(entry, self.cfg)
+            # profile 没写 model_alias 时 apply_to_config 不会覆盖它，会残留上一个
+            # 模型的别名；这里统一用该条目的规范别名，保证 --alias / 状态栏一致。
+            self.cfg.model_alias = entry.alias
             # 视觉开关：**总是显式设置**，否则从"开了视觉"的模型切到别的模型时
             # cfg.mmproj_path 会残留，导致新模型意外加载旧模型的眼睛。
             if use_vision:
@@ -419,6 +424,23 @@ def create_admin_router(manager: ModelManager, proxy: Any = None) -> APIRouter:
             data["gateway"]["queue_waiting"] = proxy.limiter.waiting
         return data
 
+    def _reject_cross_site(request: Request) -> JSONResponse | None:
+        """拒绝跨站浏览器请求（CSRF 防线）。
+
+        浏览器发 POST 一定会带 Origin（或 Referer）：只要它指向别的站点就拒绝。
+        没有 Origin/Referer 的是非浏览器客户端（curl / SDK），放行。
+        同源控制台不受影响 —— 比"强制 JSON Content-Type"更稳，也不要求带 body
+        （停止服务这类请求本来就没有 body）。
+        """
+        origin = request.headers.get("origin") or request.headers.get("referer") or ""
+        if not origin:
+            return None
+        netloc = urlsplit(origin).netloc.lower()
+        host = request.headers.get("host", "").lower()
+        if netloc and netloc != host:
+            return JSONResponse({"ok": False, "error": "跨站请求已被拒绝"}, status_code=403)
+        return None
+
     # 这些处理器内部是同步的（nvidia-smi 子进程 + 阻塞式 httpx），所以声明为普通
     # ``def``：Starlette 会把它们丢到线程池执行，绝不阻塞事件循环。若写成
     # ``async def`` 而没有 await，采样期间整个网关（含 /v1 流式转发）都会卡住。
@@ -453,6 +475,9 @@ def create_admin_router(manager: ModelManager, proxy: Any = None) -> APIRouter:
 
     @router.post("/admin/roots")
     async def update_roots(request: Request) -> JSONResponse:
+        bad = _reject_cross_site(request)
+        if bad is not None:
+            return bad
         try:
             body = await request.json()
         except ValueError:
@@ -513,6 +538,9 @@ def create_admin_router(manager: ModelManager, proxy: Any = None) -> APIRouter:
 
     @router.post("/admin/activate")
     async def activate(request: Request) -> JSONResponse:
+        bad = _reject_cross_site(request)
+        if bad is not None:
+            return bad
         try:
             body = await request.json()
         except ValueError:
@@ -523,11 +551,16 @@ def create_admin_router(manager: ModelManager, proxy: Any = None) -> APIRouter:
         vision = (body or {}).get("vision")
         if vision is not None:
             vision = bool(vision)
-        result = manager.activate(path, vision=vision)
+        # activate 里会做一次全量 GGUF 重扫（registry.find→scan），是同步阻塞的，
+        # 丢到线程池执行，别卡住正在流式转发的 /v1 请求。
+        result = await run_in_threadpool(manager.activate, path, vision)
         return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
     @router.post("/admin/stop")
-    def stop() -> JSONResponse:
+    def stop(request: Request) -> JSONResponse:
+        bad = _reject_cross_site(request)
+        if bad is not None:
+            return bad
         result = manager.stop()
         return JSONResponse(result, status_code=200 if result.get("ok") else 409)
 
@@ -537,6 +570,9 @@ def create_admin_router(manager: ModelManager, proxy: Any = None) -> APIRouter:
         index = WEB_DIR / "index.html"
         if not index.is_file():
             return HTMLResponse(f"<h1>缺少界面文件</h1><p>{index}</p>", status_code=500)
-        return HTMLResponse(index.read_text(encoding="utf-8"))
+        # no-store：控制台是单文件、随代码更新，别让浏览器缓存住旧版 JS。
+        return HTMLResponse(
+            index.read_text(encoding="utf-8"), headers={"Cache-Control": "no-store"}
+        )
 
     return router

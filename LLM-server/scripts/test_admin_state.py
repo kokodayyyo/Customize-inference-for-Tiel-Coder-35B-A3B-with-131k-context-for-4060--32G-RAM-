@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -106,6 +107,8 @@ class FakeEntry:
         self.is_projector = False
         self.mmproj_path = mmproj
         self._settings = {"mmproj_path": mmproj} if default_vision else {}
+        # 规范别名：不带目录、不带扩展名、小写（与 ModelEntry.alias 的语义一致）
+        self.alias = os.path.splitext(os.path.basename(str(path)))[0].lower()
 
     @property
     def vision_supported(self):
@@ -189,6 +192,7 @@ def main() -> int:
     check("调用顺序 stop -> start", srv.calls, ["stop", "start"])
     check("active_path 指向新模型", mgr.active_path, r"D:\models\b.gguf")
     check("状态为 running", mgr.state, STATE_RUNNING)
+    check("切换后 model_alias = 条目别名（不残留旧的）", mgr.cfg.model_alias, "b")
 
     print()
     print("[4] 切换失败时不遗留「使用中」的旧模型")
@@ -286,6 +290,30 @@ def main() -> int:
     reg.remove_root(tmp / "rootA")
     reg3 = ModelRegistry(tmp / "reg.yaml")
     check("移除后重启不恢复", "rootA" not in [p.name for p in reg3.search_roots], True)
+
+    print()
+    print("[8] KV 估算：滑窗模型按层累加，普通模型不受影响")
+    from llm_server.core.gguf import ModelShape  # noqa: PLC0415
+
+    # 30 层，每 6 层的最后 1 层是全注意力（其余滑窗 window 1024）—— 对齐 gemma4
+    pattern = tuple(i % 6 != 5 for i in range(30))          # True = 滑窗
+    kv_heads = tuple(2 if i % 6 == 5 else 8 for i in range(30))
+    swa = ModelShape(
+        arch="gemma4", block_count=30, embedding_length=2816, head_count=16,
+        head_count_kv=16, key_length=512, context_length=262144,
+        sliding_window=1024, key_length_swa=256, value_length=512, value_length_swa=256,
+        head_count_kv_per_layer=kv_heads, swa_pattern=pattern,
+    )
+    check("滑窗模型全注意力层数=5", swa.attention_layers, 5)
+    check("滑窗 KV @128K ≈ 1.43 GiB", round(swa.kv_gib(131072, "q8_0"), 2), 1.43)
+
+    # 没有滑窗信息的普通模型：行为与改动前一致（全部层随上下文增长）
+    plain = ModelShape(arch="x", block_count=10, embedding_length=4096,
+                       head_count=32, head_count_kv=8, key_length=128)
+    check("普通模型仍按全部层计", plain.attention_layers, 10)
+    check("普通模型 KV = 2*10*8*128*131072*1.0625/GiB",
+          round(plain.kv_gib(131072, "q8_0"), 3),
+          round(2 * 10 * 8 * 128 * 131072 * 1.0625 / (1024 ** 3), 3))
 
     print()
     print("=" * 60)

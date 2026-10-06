@@ -132,7 +132,9 @@ class ServerConfig:
     proxy_host: str = "0.0.0.0"  # 内网 API 服务对外监听地址
     proxy_port: int = 8000
     api_key: str = ""  # 留空表示内网免鉴权
-    allow_origins: list[str] = field(default_factory=lambda: ["*"])
+    # 默认不允许跨域：控制台是同源页面，不需要 CORS；默认放开 "*" 会让任意网页
+    # 跨域读 /admin/*（列目录、看命令行）并 CSRF 管理接口。需要浏览器跨域调用时再显式配置。
+    allow_origins: list[str] = field(default_factory=list)
 
     # ---- 运行时行为 ----
     autostart_backend: bool = True  # 网关启动时自动拉起 llama-server
@@ -322,7 +324,12 @@ def _read_config_file(path: Path) -> dict[str, Any]:
 def port_is_free(host: str, port: int) -> bool:
     """检查端口是否可绑定。"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Windows 上 SO_REUSEADDR 会允许绑定到"已被占用"的端口（语义与 POSIX 相反），
+        # 造成误判；Windows 的正确排他标志是 SO_EXCLUSIVEADDRUSE。
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
         except OSError:

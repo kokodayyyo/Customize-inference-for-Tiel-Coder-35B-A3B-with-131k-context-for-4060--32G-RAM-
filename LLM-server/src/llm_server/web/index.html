@@ -230,6 +230,7 @@ let PICK_PARENT = '';      // 目录选择器里"上级"指向
 let pollTimer = null;
 let polling = false;
 let VISION_SYNCED = null;  // 已经按运行结果回填过视觉开关的模型路径
+let VISION_OVERRIDE = {};  // 用户手动拨过的视觉开关（按模型路径），重新扫描后不丢
 
 /* ---------- API Key（服务端启用鉴权时用） ---------- */
 function getKey(){ return localStorage.getItem('llm_api_key') || ''; }
@@ -279,7 +280,7 @@ async function fetchStatus(){
     const r = await api('/admin/status');
     STATUS = await r.json();
   }catch(e){ STATUS = {state:'error', message:'控制台连不上后端：'+e}; }
-  renderStatus();
+  safeRender(renderStatus, 'renderStatus');
 }
 
 /* ================= 实时数据仪表盘 ================= */
@@ -290,12 +291,19 @@ async function fetchMetrics(){
     const r = await api('/admin/metrics');
     LAST_METRICS = await r.json();
   }catch(e){ LAST_METRICS = null; }
-  renderDash(LAST_METRICS);
+  safeRender(() => renderDash(LAST_METRICS), 'renderDash');
 }
 
 function n(v, d){ return (v===null||v===undefined||isNaN(v)) ? '—' : Number(v).toFixed(d===undefined?1:d); }
 function gi(v, d){ return (v===null||v===undefined) ? '—' : Number(v).toFixed(d===undefined?2:d) + ' GiB'; }
 function baseName(p){ return String(p||'').split(/[\\/]/).pop(); }
+function esc(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function safeRender(fn, label){
+  try{ fn(); }catch(e){ console.error((label||'渲染') + '失败：', e); }
+}
 function meterClass(p){ return p>=90?'hot':(p>=70?'warn':'ok'); }
 function meter(p, label){
   const v = Math.max(0, Math.min(100, p||0));
@@ -476,26 +484,30 @@ function drawChart(cv, hist){
   ctx.fillText('峰值 ' + max.toFixed(1) + ' tok/s', 6, 11);
 }
 async function fetchModels(){
-  $('models').innerHTML = '<div class="muted">正在扫描模型目录…</div>';
+  if(!MODELS.length) $('models').innerHTML = '<div class="muted">正在扫描模型目录…</div>';
   try{
     const r = await api('/admin/models');
     const data = await r.json();
     MODELS = data.models || [];
     ROOTS = data.search_roots || [];
     if(data.error) toast('注册表读取失败：' + data.error);
-  }catch(e){ MODELS = []; ROOTS = []; toast('扫描失败：'+e); }
+  }catch(e){
+    // 失败时保留上一次的列表，别把已显示的模型清空（看起来像丢了数据）
+    toast('扫描失败：'+e);
+  }
   $('roots').textContent = ROOTS.length ? '' : '（未配置扫描目录）';
-  renderRoots();
-  renderModels();
+  safeRender(renderRoots, 'renderRoots');
+  safeRender(renderModels, 'renderModels');
 }
 
 /* ================= 扫描目录（可增删） ================= */
 function renderRoots(){
   const bar = $('roots-bar');
   if(!bar) return;
-  bar.innerHTML = ROOTS.map(p =>
-      `<span class="chip" title="${p}"><span>${p}</span><b data-rm-root="${p}" title="移除">✕</b></span>`
-    ).join('')
+  bar.innerHTML = ROOTS.map(p => {
+      const e = esc(p);
+      return `<span class="chip" title="${e}"><span>${e}</span><b data-rm-root="${e}" title="移除">✕</b></span>`;
+    }).join('')
     + `<button id="btn-add-root">＋ 添加目录</button>`
     + (ROOTS.length ? '' : '<span class="muted">尚未添加模型目录，点左边按钮选择。</span>');
   const add = $('btn-add-root');
@@ -522,9 +534,9 @@ async function browseTo(path){
   PICK_PARENT = data.parent || '';
   $('pick-path').value = data.path || '';
   const rows = !data.path
-    ? (data.drives || []).map(d => `<div class="item" data-d="${d}">🖴 ${d}</div>`)
+    ? (data.drives || []).map(d => `<div class="item" data-d="${esc(d)}">🖴 ${esc(d)}</div>`)
     : (data.dirs || []).map(d =>
-        `<div class="item" data-d="${d.path}">📁 ${d.name}` +
+        `<div class="item" data-d="${esc(d.path)}">📁 ${esc(d.name)}` +
         `${d.has_gguf ? ' <span class="tag ok">含模型</span>' : ''}</div>`);
   $('pick-list').innerHTML = rows.length ? rows.join('') : '<div class="none">（没有子目录）</div>';
   document.querySelectorAll('#pick-list .item').forEach(el=>{
@@ -533,26 +545,30 @@ async function browseTo(path){
 }
 
 async function addRoot(path){
-  const r = await api('/admin/roots', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({action:'add', path})
-  });
-  const j = await r.json().catch(()=>({}));
-  if(!j.ok){ toast(j.error || ('添加失败 HTTP ' + r.status)); return false; }
-  toast('已添加：' + path);
-  await fetchModels();
-  return true;
+  try{
+    const r = await api('/admin/roots', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'add', path})
+    });
+    const j = await r.json().catch(()=>({}));
+    if(!j.ok){ toast(j.error || ('添加失败 HTTP ' + r.status)); return false; }
+    toast('已添加：' + path);
+    await fetchModels();
+    return true;
+  }catch(e){ toast('添加失败：' + e); return false; }
 }
 
 async function removeRoot(path){
-  const r = await api('/admin/roots', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({action:'remove', path})
-  });
-  const j = await r.json().catch(()=>({}));
-  if(!j.ok){ toast(j.error || '移除失败'); return; }
-  toast('已移除：' + path);
-  await fetchModels();
+  try{
+    const r = await api('/admin/roots', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'remove', path})
+    });
+    const j = await r.json().catch(()=>({}));
+    if(!j.ok){ toast(j.error || '移除失败'); return; }
+    toast('已移除：' + path);
+    await fetchModels();
+  }catch(e){ toast('移除失败：' + e); }
 }
 
 function renderStatus(){
@@ -594,7 +610,10 @@ function renderStatus(){
     VISION_SYNCED = null;
   }else if(STATUS.active_path !== VISION_SYNCED){
     document.querySelectorAll('input[data-vision]').forEach(i=>{
-      if(i.dataset.vision === STATUS.active_path) i.checked = !!STATUS.mmproj_path;
+      if(i.dataset.vision === STATUS.active_path){
+        i.checked = !!STATUS.mmproj_path;
+        VISION_OVERRIDE[i.dataset.vision] = i.checked;
+      }
     });
     VISION_SYNCED = STATUS.active_path || null;
   }
@@ -607,42 +626,46 @@ function renderModels(){
   for(const m of MODELS){
     const est = m.estimate || {};
     const free = ((STATUS.gpus||[])[0]||{}).free_gib;
-    const tight = free !== undefined && est.vram_total_gib !== undefined
-                  && est.vram_total_gib > free - 0.3;
+    const vram = est.vram_total_gib, kv = est.kv_gib, ram = est.experts_ram_gib;
+    const tight = free != null && vram != null && vram > free - 0.3;
+    const visionOn = (m.path in VISION_OVERRIDE) ? VISION_OVERRIDE[m.path] : !!m.vision_default;
     const el = document.createElement('div');
     el.className = 'card' + (tight ? ' warn' : '');
     el.dataset.path = m.path;
     el.innerHTML = `
-      <h3>${m.label}
+      <h3>${esc(m.label)}
         ${m.matched ? '<span class="tag ok">已标定</span>' : '<span class="tag warn">未标定</span>'}
-        ${m.size_gib ? `<span class="tag">${m.size_gib.toFixed(2)} GiB</span>` : ''}
+        ${m.size_gib ? `<span class="tag">${Number(m.size_gib).toFixed(2)} GiB</span>` : ''}
       </h3>
-      <div class="fname">${m.name}</div>
-      ${m.note ? `<div class="note">${m.note}</div>` : ''}
+      <div class="fname">${esc(m.name)}</div>
+      ${m.note ? `<div class="note">${esc(m.note)}</div>` : ''}
       <div class="kv">
-        <span class="k">结构</span><span>${m.shape||'—'}</span>
+        <span class="k">结构</span><span>${esc(m.shape)||'—'}</span>
         <span class="k">上下文</span><span>${est.context?(est.context/1024).toFixed(0)+'K':'—'}
           ${m.context_max?`<span class="muted">（训练 ${(m.context_max/1024).toFixed(0)}K）</span>`:''}</span>
-        <span class="k">显存占用</span><span>${est.vram_total_gib!==undefined?est.vram_total_gib.toFixed(2)+' GiB':'—'}
+        <span class="k">显存占用</span><span>${vram!=null?Number(vram).toFixed(2)+' GiB':'—'}
           ${est.measured?'<span class="tag ok">实测</span>':'<span class="tag warn">估算</span>'}
-          ${est.kv_gib!==undefined?`<span class="muted">（KV ${est.kv_gib.toFixed(2)}）</span>`:''}</span>
-        <span class="k">内存占用</span><span>${est.experts_ram_gib!==undefined?est.experts_ram_gib.toFixed(2)+' GiB':'—'}</span>
+          ${kv!=null?`<span class="muted">（KV ${Number(kv).toFixed(2)}）</span>`:''}</span>
+        <span class="k">内存占用</span><span>${ram!=null?Number(ram).toFixed(2)+' GiB':'—'}</span>
         ${m.measured && m.measured.decode_tps ? `<span class="k">实测速度</span><span>decode ${m.measured.decode_tps} · prefill ${m.measured.prefill_tps||'—'} tok/s</span>` : ''}
-        ${m.vision_supported ? `<span class="k">视觉组件</span><span>${baseName(m.mmproj)}</span>` : ''}
-        <span class="k">模型名</span><span>${m.alias}</span>
+        ${m.vision_supported ? `<span class="k">视觉组件</span><span>${esc(baseName(m.mmproj))}</span>` : ''}
+        <span class="k">模型名</span><span>${esc(m.alias)}</span>
       </div>
       <div class="actions">
-        <button class="primary" data-act="start" data-path="${m.path}">启动此模型</button>
-        ${m.vision_supported ? `<label class="switch" title="开启后一并加载视觉投影：${m.mmproj||''}">
-            <input type="checkbox" data-vision="${m.path}"${m.vision_default?' checked':''}>
+        <button class="primary" data-act="start" data-path="${esc(m.path)}">启动此模型</button>
+        ${m.vision_supported ? `<label class="switch" title="开启后一并加载视觉投影：${esc(m.mmproj)}">
+            <input type="checkbox" data-vision="${esc(m.path)}"${visionOn?' checked':''}>
             <span class="track"></span>视觉
           </label>` : ''}
-        ${m.error?`<span class="tag warn">${m.error}</span>`:''}
+        ${m.error?`<span class="tag warn">${esc(m.error)}</span>`:''}
       </div>`;
     box.appendChild(el);
   }
   document.querySelectorAll('button[data-act="start"]').forEach(b=>{
     b.onclick = () => activate(b.dataset.path);
+  });
+  document.querySelectorAll('input[data-vision]').forEach(i=>{
+    i.onchange = () => { VISION_OVERRIDE[i.dataset.vision] = i.checked; };
   });
   renderStatus();
 }
@@ -676,9 +699,13 @@ function visionWanted(path){
 
 $('btn-stop').onclick = async () => {
   if(!confirm('停止当前的 llama-server？（网页控制台会保留，随时可以再启动）')) return;
-  const r = await api('/admin/stop', {method:'POST'});
-  const j = await r.json().catch(()=>({}));
-  if(!j.ok) toast(j.error||'停止失败');
+  try{
+    const r = await api('/admin/stop', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
+    });
+    const j = await r.json().catch(()=>({}));
+    if(!j.ok) toast(j.error||'停止失败');
+  }catch(e){ toast('停止失败：'+e); }
   fetchStatus();
 };
 $('btn-rescan').onclick = fetchModels;
@@ -690,9 +717,11 @@ $('btn-key').onclick = () => {
   fetchStatus();
 };
 $('btn-log').onclick = async () => {
-  const r = await api('/admin/log?lines=80');
-  const j = await r.json().catch(()=>({tail:''}));
-  $('log').textContent = j.tail || '（没有日志）';
+  try{
+    const r = await api('/admin/log?lines=80');
+    const j = await r.json().catch(()=>({tail:''}));
+    $('log').textContent = j.tail || '（没有日志）';
+  }catch(e){ toast('读取日志失败：'+e); }
 };
 $('btn-copy').onclick = () => {
   const url = location.origin + '/v1';
@@ -713,9 +742,14 @@ $('pick-add').onclick = async () => {
 $('picker').onclick = e => { if(e.target && e.target.id === 'picker') closePicker(); };
 
 (async function init(){
-  await fetchModels();
-  await fetchStatus();
-  await fetchMetrics();
+  try{
+    await fetchModels();
+    await fetchStatus();
+    await fetchMetrics();
+  }catch(e){
+    // 兜底：即便某次渲染/拉取抛错，也务必把轮询装上，别让页面永久停摆。
+    console.error('初始化失败：', e);
+  }
   pollTimer = setInterval(async () => {
     // 上一轮没跑完（例如后端在忙）或页面在后台时跳过这一拍，避免请求堆叠；
     // 堆叠会让 /admin/metrics 的采样交错，算出荒谬的实时速度。

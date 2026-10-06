@@ -180,7 +180,8 @@ class BackendProxy:
                 params=dict(request.query_params),
             )
         except BaseException:
-            self.limiter.release()
+            # 不在这里释放：由 forward() 的统一异常处理释放一次，避免同一次失败
+            # 释放两次（asyncio.Semaphore 只加不减，多释放会永久放大并发额度）。
             raise
 
         self.limiter.release()
@@ -210,7 +211,7 @@ class BackendProxy:
         try:
             upstream = await self.client.send(req, stream=True)
         except BaseException:
-            self.limiter.release()
+            # 同 _buffered：释放交给 forward()，避免重复释放信号量。
             raise
 
         # 后端报错时不是 SSE，直接缓冲返回，避免客户端解析失败
@@ -351,6 +352,11 @@ def create_app(cfg: ServerConfig, backend_server: LlamaBackendServer | None = No
 
         await proxy.open()
         _print_banner(cfg, backend, bool(state["ready"]))
+        if not cfg.api_key and cfg.proxy_host not in ("127.0.0.1", "localhost"):
+            log.warning(
+                "管理接口未启用鉴权（api_key 为空）且监听 %s：内网任何设备都能启停模型、"
+                "浏览目录。发到内网请设置 --api-key。", cfg.proxy_host,
+            )
         try:
             yield
         finally:

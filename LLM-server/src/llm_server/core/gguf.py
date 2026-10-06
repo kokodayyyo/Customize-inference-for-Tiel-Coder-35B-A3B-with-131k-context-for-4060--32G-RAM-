@@ -108,6 +108,14 @@ class ModelShape:
     expert_shared_ff_length: int = 0
     full_attention_interval: int = 0
     nextn_predict_layers: int = 0
+    # ---- 滑动窗口注意力（SWA，如 Gemma4）----
+    # 这些层只保留 window 个 token 的 KV，不随上下文增长；其余层是全注意力。
+    sliding_window: int = 0
+    key_length_swa: int = 0
+    value_length: int = 0
+    value_length_swa: int = 0
+    head_count_kv_per_layer: tuple[int, ...] = ()
+    swa_pattern: tuple[bool, ...] = ()
 
     @property
     def head_dim(self) -> int:
@@ -127,10 +135,14 @@ class ModelShape:
     def attention_layers(self) -> int:
         """需要随上下文增长的 KV cache 的层数。
 
-        混合架构（如 ``full_attention_interval=4``）里只有每 4 层中的 1 层是
-        真注意力，其余是线性注意力（固定大小的循环状态）。
+        三种情况：
+        * 滑动窗口（Gemma4 等）：只有非滑窗层随上下文增长；
+        * 混合线性注意力（如 ``full_attention_interval=4``）：每 4 层中 1 层；
+        * 普通模型：全部层。
         """
         layers = self.compute_layers
+        if self.swa_pattern and len(self.swa_pattern) >= layers:
+            return max(1, sum(1 for i in range(layers) if not self.swa_pattern[i]))
         if self.full_attention_interval > 1:
             return max(1, layers // self.full_attention_interval)
         return max(1, layers)
@@ -146,12 +158,27 @@ class ModelShape:
     def kv_gib(self, context: int, quant: str = "q8_0") -> float:
         """计算指定上下文与量化下的 KV cache 占用（GiB）。
 
-        KV 字节数 = 2(K和V) × **全注意力层数** × KV头数 × head_dim × token 数
-                    × 每元素字节
+        KV 字节数 = Σ层 [KV头数 × (key维 + value维) × token 数] × 每元素字节。
+        滑窗层的 token 数取 ``min(context, sliding_window)``，不随上下文增长。
         """
         if not self.usable:
             return 0.0
         per_elem = KV_BYTES_PER_ELEMENT.get(quant, 2.0)
+        # 有逐层信息（滑窗）时按层累加
+        if (self.head_count_kv_per_layer and self.swa_pattern
+                and len(self.head_count_kv_per_layer) == len(self.swa_pattern)):
+            elems = 0.0
+            for kv_heads, is_swa in zip(self.head_count_kv_per_layer, self.swa_pattern):
+                if is_swa and self.sliding_window:
+                    toks = min(context, self.sliding_window)
+                    key = self.key_length_swa or self.key_length
+                    val = self.value_length_swa or self.value_length or key
+                else:
+                    toks = context
+                    key = self.key_length or self.head_dim
+                    val = self.value_length or key
+                elems += kv_heads * (key + val) * toks
+            return elems * per_elem / GIB
         total = (2 * self.attention_layers * self.head_count_kv
                  * self.head_dim * context * per_elem)
         return total / GIB
@@ -168,7 +195,10 @@ class ModelShape:
         ]
         if self.nextn_predict_layers:
             bits.append(f"计算层 {self.compute_layers}（忽略 {self.nextn_predict_layers} 层 MTP）")
-        if self.full_attention_interval > 1:
+        if self.swa_pattern:
+            bits.append(f"滑窗注意力 window={self.sliding_window}"
+                        f"（随上下文增长的层 {self.attention_layers}/{self.compute_layers}）")
+        elif self.full_attention_interval > 1:
             bits.append(f"全注意力层 {self.attention_layers}"
                         f"（每 {self.full_attention_interval} 层一个，其余为线性注意力）")
         if self.is_moe:
@@ -442,6 +472,18 @@ def model_shape(path: str | Path) -> ModelShape:
         value = meta.get(f"{arch}.{suffix}", meta.get(f"general.{suffix}", default))
         return value if isinstance(value, int) else default
 
+    def get_int_list(suffix: str) -> tuple[int, ...]:
+        value = meta.get(f"{arch}.{suffix}")
+        if isinstance(value, (list, tuple)) and value and all(isinstance(x, int) for x in value):
+            return tuple(value)
+        return ()
+
+    def get_bool_list(suffix: str) -> tuple[bool, ...]:
+        value = meta.get(f"{arch}.{suffix}")
+        if isinstance(value, (list, tuple)) and value:
+            return tuple(bool(x) for x in value)
+        return ()
+
     return ModelShape(
         arch=arch,
         name=str(meta.get("general.name", "")),
@@ -458,6 +500,12 @@ def model_shape(path: str | Path) -> ModelShape:
         expert_shared_ff_length=get("expert_shared_feed_forward_length"),
         full_attention_interval=get("full_attention_interval"),
         nextn_predict_layers=get("nextn_predict_layers"),
+        sliding_window=get("attention.sliding_window"),
+        key_length_swa=get("attention.key_length_swa"),
+        value_length=get("attention.value_length"),
+        value_length_swa=get("attention.value_length_swa"),
+        head_count_kv_per_layer=get_int_list("attention.head_count_kv"),
+        swa_pattern=get_bool_list("attention.sliding_window_pattern"),
     )
 
 

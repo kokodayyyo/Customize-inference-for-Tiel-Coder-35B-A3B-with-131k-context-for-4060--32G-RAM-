@@ -192,8 +192,11 @@ class ProcessSampler:
                 now = time.perf_counter()
                 prev = self._last.get(pid)
                 self._last[pid] = (now, cpu_100ns)
+                # 换模型会换 pid，旧基线留着没用；只保留最近几次，防止无上限增长。
+                if len(self._last) > 8:
+                    for stale in list(self._last)[:-8]:
+                        self._last.pop(stale, None)
                 out["cpu_seconds"] = round(cpu_100ns / 1e7, 1)
-                out["threads"] = self._thread_count(pid)
                 if prev is not None and now > prev[0]:
                     delta = (cpu_100ns - prev[1]) / 1e7
                     cores = os.cpu_count() or 1
@@ -207,22 +210,6 @@ class ProcessSampler:
             return out
         finally:
             _kernel32.CloseHandle(handle)
-
-    @staticmethod
-    def _thread_count(pid: int) -> int:
-        """线程数（用 wmic 在受限环境下可能不可用，失败就返回 0）。"""
-        try:
-            out = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, timeout=10,
-            ).stdout
-            # "name","pid","session","sess#","memusage"
-            cells = [c.strip('"') for c in out.strip().split('","')]
-            if len(cells) >= 5:
-                return 0  # tasklist 不报线程数，保留字段给将来
-        except (OSError, subprocess.SubprocessError):
-            pass
-        return 0
 
 
 # ---------------------------------------------------------------------------

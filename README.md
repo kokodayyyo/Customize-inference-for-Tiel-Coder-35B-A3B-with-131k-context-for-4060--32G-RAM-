@@ -22,12 +22,13 @@
 | 内存工作集 | 13.76 GiB |
 | 128K 上下文下的 decode（基准版 16.9 GiB）| 29.2 tok/s |
 
-仓库里预置了**两套已标定参数**，网页上点一下就能切换（见「快速开始 · 第 5 步」）：
+仓库里预置了**三套已标定参数**，网页上点一下就能切换（见「快速开始 · 第 5 步」）：
 
 | 模型 | 体积 | 上下文 | decode | 特点 |
 |---|---|---|---|---|
 | **APEX** `...APEX-I-MiniPlus-V2.1` | 13.74 GiB | **200K** | **38.1 tok/s** | 更快更省，量化更低（Q3_K / IQ3_XXS）|
 | **基准版** `...MTP-UD-IQ4_XS` | 16.88 GiB | 128K | 29.2 tok/s | 质量更好（IQ4_XS）|
+| **Gemma-4 26B-A4B** `...StyleTune-V2-QAT-UD-Q4_K_XL` | 13.61 GiB | 170K | 26.9 tok/s | gemma4 MoE，Q4_0 QAT，滑窗注意力 KV 很小 |
 
 ---
 
@@ -61,15 +62,17 @@ pip install -r LLM-server\requirements.txt
 
 ### 模型文件（需自行获取）
 
-仓库预置了两套已标定参数，对应两个 GGUF（**都不随仓库分发**）：
+仓库预置了三套已标定参数，对应三个 GGUF（**都不随仓库分发**）：
 
 | 文件 | 体积 | 上下文 | 说明 |
 |---|---|---|---|
 | `Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1.gguf` | 13.74 GiB | **200K** | **默认**，更快更省 |
 | `Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.gguf` | 16.88 GiB | 128K | 质量更好 |
+| `Gemma-4-26B-A4B-StyleTune-V2-QAT-UD-Q4_K_XL.gguf` | 13.61 GiB | 170K | gemma4 MoE，另一套架构 |
 
-两者都是 **`qwen35moe` 架构**（Qwen3-Next 式：40 个计算层里每 4 层只有 1 层是
-真注意力，其余是线性注意力；256 专家、每 token 激活 8 个）。
+前两个是 **`qwen35moe` 架构**（Qwen3-Next 式：40 个计算层里每 4 层只有 1 层是
+真注意力，其余是线性注意力；256 专家、每 token 激活 8 个）；第三个是 **`gemma4`**
+（30 层、128 专家/激活 8、滑窗注意力 window 1024，只有 5 层随上下文增长）。
 
 > 本项目**不附带模型**。请从你获取该模型的渠道下载，放到任意位置后改配置指向它。
 >
@@ -328,6 +331,15 @@ for chunk in stream:
 `/v1/models`、`/docs` 外的接口都要求 `Authorization: Bearer <key>`。
 
 后端 `llama-server` 只监听 `127.0.0.1`，不直接暴露到内网，避免绕过鉴权。
+
+> **管理接口的防护**：`/admin/*` 的写操作会拒绝**跨站**浏览器请求（校验 `Origin`/`Referer`
+> 与 `Host` 同源），且默认 **不开跨域**（`allow_origins: []`）—— 浏览器不会替任意网页把
+> 这类请求发过来，避免被恶意页面 CSRF（启停模型）或跨域读目录列表。控制台是同源页面，
+> 不受影响；curl / SDK 这类没有 Origin 的客户端也照常可用。
+> 只有在确实需要浏览器跨域调用时才去配 `allow_origins`。
+>
+> 注意 `/admin/browse`（网页选目录）会列出服务器目录结构（只列目录名、不读文件内容）。
+> 所以**发到内网时建议设置 `--api-key`**：`api_key` 为空时启动日志会就此告警。
 
 ---
 
@@ -650,11 +662,11 @@ local LLM/
 | `check_syntax.py` | 语法自检 |
 | `test_cli.py` | 命令行参数解析单测（43 项）|
 | `test_load_ladder.py` | 加载降级阶梯单测（18 项）|
-| `test_admin_state.py` | 模型停止/切换/视觉开关/扫描目录状态机单测（34 项；不加载模型）|
+| `test_admin_state.py` | 模型停止/切换/视觉开关/扫描目录/KV估算状态机单测（39 项；不加载模型）|
 | `test_jobobject.py` | 显存不泄漏验证（8 项）|
 | `e2e_test.py` | 接口端到端（21 项）|
 | `final_acceptance.py` | 默认配置验收 |
-| `test_ui.mjs` | **控制台页面集成自检**（Node 18+，30 项；`--offline` 可脱机跑）|
+| `test_ui.mjs` | **控制台页面集成自检**（Node 18+，33 项；`--offline` 可脱机跑）|
 
 **诊断 / 示例**
 
@@ -683,7 +695,7 @@ D:\anaconda\envs\test1\python.exe scripts\test_jobobject.py
 D:\anaconda\envs\test1\python.exe scripts\final_acceptance.py
 
 REM 以下两个需要服务正在运行
-node scripts\test_ui.mjs --offline              REM 控制台页面自检（脱机，21 项）
+node scripts\test_ui.mjs --offline              REM 控制台页面自检（脱机，33 项）
 node scripts\test_ui.mjs                        REM 用真实服务数据再跑一遍
 D:\anaconda\envs\test1\python.exe scripts\stress_ctx.py   REM 长上下文压力验证
 ```

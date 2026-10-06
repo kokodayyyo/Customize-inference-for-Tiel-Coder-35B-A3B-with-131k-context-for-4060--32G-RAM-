@@ -492,13 +492,20 @@ class LlamaBackendServer:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         return LOG_DIR / f"llama-server-ctx{prof.context_size}-{stamp}.log"
 
-    def _log_tail(self, lines: int = 25) -> str:
+    def _log_tail(self, lines: int = 25, max_bytes: int = 512 * 1024) -> str:
+        """只读日志文件末尾最多 ``max_bytes``，避免把整个日志读进内存。"""
         if not self.log_path or not self.log_path.is_file():
             return ""
         try:
-            text = self.log_path.read_text(encoding="utf-8", errors="replace")
+            with open(self.log_path, "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                start = max(0, fh.tell() - max_bytes)
+                fh.seek(start)
+                data = fh.read()
         except OSError:
             return ""
+        # 从头截断可能切在多字节字符中间，errors="replace" 已兜底
+        text = data.decode("utf-8", errors="replace")
         return "\n".join(text.splitlines()[-lines:])
 
     def log_tail(self, lines: int = 25) -> str:

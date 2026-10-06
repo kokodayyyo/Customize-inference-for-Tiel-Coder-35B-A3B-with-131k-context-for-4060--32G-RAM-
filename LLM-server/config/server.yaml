@@ -90,7 +90,9 @@ backend_port: 8080
 proxy_host: "0.0.0.0"     # 内网 API 服务监听所有网卡
 proxy_port: 8000
 api_key: ""               # 留空 = 内网免鉴权；建议设置以限制调用方
-allow_origins: ["*"]
+# 允许跨域的来源列表。默认 []（同源控制台不需要 CORS）。填 ["*"] 会让任意网页
+# 跨域读写 /admin/*，除非你确实需要浏览器跨域调用，否则不要放开。
+allow_origins: []
 
 # ---------------- 运行行为 ----------------
 autostart_backend: true

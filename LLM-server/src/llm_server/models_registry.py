@@ -113,7 +113,10 @@ class ModelEntry:
         bits = [f"{s.block_count} 层"]
         if s.expert_count:
             bits.append(f"{s.expert_count} 专家/激活 {s.expert_used_count}")
-        if s.full_attention_interval > 1:
+        if s.swa_pattern:
+            bits.append(f"{s.attention_layers}/{s.compute_layers} 层全注意力"
+                        f"（其余滑窗 window {s.sliding_window}）")
+        elif s.full_attention_interval > 1:
             bits.append(f"{s.attention_layers}/{s.compute_layers} 层全注意力")
         else:
             bits.append(f"{s.attention_layers} 层全注意力")
@@ -315,7 +318,10 @@ class ModelRegistry:
         try:
             f.parent.mkdir(parents=True, exist_ok=True)
             payload = {"search_roots": [str(p) for p in self.search_roots]}
-            f.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            # 原子写：先写临时文件再替换，避免写一半被读到损坏的 JSON。
+            tmp = f.with_name(f.name + ".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(f)
             self.roots_error = ""
         except OSError as exc:
             self.roots_error = f"保存扫描目录失败: {exc}"
