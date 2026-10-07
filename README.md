@@ -69,6 +69,7 @@ D:\anaconda\envs\test1\python.exe LLM-server\scripts\fetch_runtime.py
 | `Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1.gguf` | 13.74 GiB | **200K** | 更快更省（Q3_K/IQ3_XXS）|
 | `Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.gguf` | 16.88 GiB | 128K | 质量更好（IQ4_XS）|
 | `gemma-4-26B-A4B-heretic-APEX-Compact.gguf` | 14.43 GiB | 150K | gemma4 MoE（另一套架构）|
+| `Occamy-1.0.APEX-I-MiniPlus-V2.1-Abliterated.gguf` | 13.65 GiB | **200K** | 与 Tile APEX 同族，去审查版；带视觉投影 |
 
 换成**其它同架构的 GGUF** 也能跑，但性能/占用要重新标定（见第 6 节）；非 MoE
 （dense）也能列出来，只是没有摆位收益，会用保守默认参数启动。
@@ -91,7 +92,7 @@ start_server.bat    REM ② 起服务 + 控制台（不加载模型，约 1 秒�
 
 浏览器打开 **http://127.0.0.1:8000/ui**：
 
-- 自动扫描目录里的 `.gguf`，每个模型一张卡片（体积、结构、显存/内存占用、是否已标定）；
+- 自动扫描目录里的 `.gguf`（默认扫描 `D:/models`、`E:/models`），每个模型一张卡片（体积、结构、显存/内存占用、是否已标定）；
 - **目录可自己加/删**：点「＋ 添加目录」用目录选择器（可逐级浏览，含模型的目录会标
   「含模型」，也能直接粘路径）；改动存到 `config/model_roots.json`；
 - 点**「启动此模型」**即套用它标定好的参数加载（约 10–15 秒，有进度条）；
@@ -114,7 +115,7 @@ start_server.bat    REM ② 起服务 + 控制台（不加载模型，约 1 秒�
 
 ## 4. 预置了哪些模型配置（按 32G 内存 + 4060 标定）
 
-三套参数都写在 `config/models.yaml`，网页上点一下即用。数字是 `scripts/moe_probe.py`
+四套参数都写在 `config/models.yaml`，网页上点一下即用。数字是 `scripts/moe_probe.py`
 实测（控制台会标「实测」；以它为准）：
 
 | 模型 | 文件（完整名）| 体积 | 上下文 | decode（空载）| prefill | 显存净增 | 特点 |
@@ -122,15 +123,19 @@ start_server.bat    REM ② 起服务 + 控制台（不加载模型，约 1 秒�
 | Tile 35B-A3B APEX | `Cyber-Tiel-Coder-35B-A3B.APEX-I-MiniPlus-V2.1.gguf` | 13.74 GiB | **200K** | 30.5 tok/s | 1137 tok/s | 5.02 GiB | 更快更省，量化更低 |
 | Tile 35B-A3B 基准版 | `Cyber-Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.gguf` | 16.88 GiB | 128K | 29.2 tok/s | 1049 tok/s | 4.41 GiB | 质量更好 |
 | Gemma 4 26B-A4B Heretic APEX | `gemma-4-26B-A4B-heretic-APEX-Compact.gguf` | 14.43 GiB | 150K | 29.3 tok/s | 1324 tok/s | 5.03 GiB | gemma4 MoE，KV 很小 |
+| Occamy 1.0 APEX Abliterated | `Occamy-1.0.APEX-I-MiniPlus-V2.1-Abliterated.gguf` | 13.65 GiB | **200K** | 35.7 tok/s | 991 tok/s | 4.86 GiB | 与 Tile APEX 同族；去审查版，带视觉 |
 
 共同的定盘参数：`cpu_moe`（专家放内存）、`ubatch 2048`、KV `q8_0` 放显存、
 `load_mode none`（不用 mmap，快 ~17%）、`threads 8`（实测 8/16/24 无差异，留一半核给桌面）。所有模型都在 **8 GiB 显存**里留了安全余量。
-APEX 还额外开了 `--spec-type ngram-simple` 推测解码：复制/改写代码类输出实测
+Tile APEX 和 Occamy 还额外开了 `--spec-type ngram-simple` 推测解码：复制/改写代码类输出实测
 decode **+15~36%**，其他场景零损失（见 NOTES 第 10 章）。
+Tile APEX 与 Occamy 都显式指定了发布方提供的 `chat_template.jinja`（比 GGUF 内嵌版
+新，带视觉渲染）；Occamy 还带视觉开关（同目录 `mmproj-Q8_0.gguf`，默认关；开启会
+多占 ~0.57 GiB 显存），200K 实测逐级填充到 19.6 万 token 无崩溃（显存峰值 7119 MiB）。
 
-> Tile-35B 的上下文能到 200K，是因为它每 4 层只有 1 层真注意力（其余是线性注意力，
-> 状态不随上下文增长），KV 只有 ~2 GiB；Gemma-4 是滑窗注意力（window 1024），
-> 只有 5 层随上下文增长，KV 更小。**为什么 8G 卡能跑这么长，见 NOTES。**
+> Tile-35B（以及同族的 Occamy）上下文能到 200K，是因为它每 4 层只有 1 层真注意力
+> （其余是线性注意力，状态不随上下文增长），KV 只有 ~2 GiB；Gemma-4 是滑窗注意力
+> （window 1024），只有 5 层随上下文增长，KV 更小。**为什么 8G 卡能跑这么长，见 NOTES。**
 
 ---
 

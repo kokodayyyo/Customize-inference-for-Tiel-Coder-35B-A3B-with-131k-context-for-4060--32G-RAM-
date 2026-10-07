@@ -53,6 +53,7 @@ def build_chinese_prompt(target_tokens: int) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="上下文压力验证")
+    parser.add_argument("--model", default=str(mp.DEFAULT_MODEL))
     parser.add_argument("--ctx", type=int, default=131072)
     parser.add_argument("--fills", default="0,8000,32000,65536,100000",
                         help="要填充到的 token 数，逗号分隔")
@@ -76,7 +77,7 @@ def main() -> int:
 
     cmd = [
         str(engine / "llama-server.exe"),
-        "--model", str(mp.DEFAULT_MODEL),
+        "--model", str(args.model),
         "--host", "127.0.0.1", "--port", str(args.port),
         "--n-gpu-layers", "99",
         "--ctx-size", str(args.ctx),

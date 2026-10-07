@@ -21,6 +21,7 @@
 # model_roots.json，存在时它会覆盖这里的 search_roots（不会改坏本文件注释）。
 search_roots:
   - "D:/models"
+  - "E:/models"
 
 # 扫描时忽略的目录名片段（避免翻进缓存/回收站之类）
 ignore_dirs:
@@ -123,9 +124,13 @@ profiles:
       load_mode: "none"
       threads: 8
       gpu_layers: 99
+      # 发布方提供的 chat_template.jinja（11.6KB，带视觉渲染；GGUF 内嵌的是
+      # 30.5KB 的 froggeric-v22.5.0 旧版）——显式指定，已验证渲染正常。
       # ngram 推测解码（A/B 实测见 NOTES 第 10 章）：复制/改写代码类输出
       # decode +15~36%（acceptance ≈99%），其他场景无损失。
       extra_args:
+        - "--chat-template-file"
+        - "D:/models/Tile/Tile-35BA3B apex/chat_template (1).jinja"
         - "--spec-type"
         - "ngram-simple"
       # 同目录的 mmproj-Q8_0.gguf 会被自动识别；这里显式写 = 指定文件且默认开启
@@ -140,6 +145,60 @@ profiles:
       prefill_tps: 1137
       decode_at_153k: 17.7      # 填充 15.3 万 token 后
       first_token_at_153k_s: 181
+
+  # ----------------------------------------------------------
+  # Occamy 1.0 APEX Abliterated（qwen35moe，13.65 GiB，200K）
+  #
+  # 与 Tile-35B-A3B APEX **同族**：40 层 / 256 专家激活 8 / 每 4 层 1 个全注意力
+  # （10 层 KV）/ 训练上下文 262144，量化同为 Q3_K(7.03G)+IQ3_XXS(5.74G)。
+  # 张量账本：专家 12.19 GiB → 内存，其余 1.45 GiB → 显存。
+  # "Abliterated" = 去审查版；目录里带 mmproj-Q8_0.gguf（视觉，0.57 GiB，控制台
+  # 卡片上的「视觉」开关，默认关——开启会额外吃显存，200K 下余量本就不多）。
+  # 发布方附带的 chat_template.jinja（比 GGUF 内嵌版新，含视觉渲染）在 extra_args
+  # 里显式指定，已验证可正常渲染 + 对话。
+  #
+  # 实测（scripts/moe_probe.py + scripts/stress_ctx.py，ctx=204800，cpu-moe，
+  #      q8_0 KV，ubatch 2048，batch 8192，load none，threads 8）：
+  #   加载 33s（模型在 E: 盘）| 显存净增 4.86 GiB（空载 6613 MiB）
+  #   decode 35.7（空载）→ 22.7（填 10.5 万）→ 18.8（填 19.6 万）
+  #   prefill 991（8192 合成）→ 840（15.7 万真实中文）→ 759（19.6 万）
+  #   稳定性：0 / 2.5万 / 5.2万 / 10.5万 / 15.7万 / 18.8万 / 19.6万 token
+  #          逐级填充全部通过，显存全程平坦（峰值 7119 MiB），无崩溃 → 200K 可用。
+  # ----------------------------------------------------------
+  - match: "Occamy-1.0"
+    label: "Occamy 1.0 APEX Abliterated"
+    note: "Q3_K+IQ3_XXS / 13.65 GiB / 200K。与 Tile APEX 同族；去审查版，带视觉投影与新版 chat template。"
+    settings:
+      model_alias: "occamy-1.0"
+      context_size: 204800
+      cpu_moe: true             # 专家 12.19 GiB 放内存
+      n_cpu_moe: -1
+      ubatch_size: 2048
+      batch_size: 8192
+      kv_cache_type_k: "q8_0"
+      kv_cache_type_v: "q8_0"
+      kv_offload: true
+      load_mode: "none"
+      threads: 8
+      gpu_layers: 99
+      extra_args:
+        - "--chat-template-file"      # 发布方模板（比内嵌版新，含视觉渲染）
+        - "E:/models/Occamy/MiniPlus-V2.1/chat_template.jinja"
+        - "--spec-type"               # ngram 推测解码：复制/改码类输出 +15~36%
+        - "ngram-simple"
+      # 同目录 mmproj-Q8_0.gguf 会被自动识别；显式指定 = 指定文件且默认开启视觉
+      # mmproj_path: "E:/models/Occamy/MiniPlus-V2.1/mmproj-Q8_0.gguf"
+    measured:
+      vram_gib: 4.86            # 净增（空载 6613 MiB）
+      vram_peak_mib: 7119       # 压测峰值
+      ram_working_set_gib: 13.4
+      decode_tps: 35.7          # 空载
+      prefill_tps: 991
+      decode_at_105k: 22.7
+      decode_at_157k: 20.3
+      decode_at_195k: 18.8
+      first_token_at_195k_s: 258
+      load_seconds: 33
 
   # ----------------------------------------------------------
   # Gemma-4 26B-A4B Heretic APEX（gemma4 架构，14.43 GiB，APEX 混合量化）
