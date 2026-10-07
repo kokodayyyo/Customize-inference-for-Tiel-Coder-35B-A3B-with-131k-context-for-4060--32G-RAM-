@@ -1,12 +1,14 @@
 """llama.cpp 后端定位与探测。
 
-本模块负责在本机自动找到可用的 llama.cpp 运行时（llama-server.exe）及其
-CUDA vendor DLL 目录，避免重新编译。优先使用 LM Studio 自带的 CUDA 构建。
+本模块负责在本机自动找到可用的 llama.cpp 运行时（llama-server.exe），避免重新编译。
 
 设计要点：
-- LM Studio 把引擎放在 ``~/.lmstudio/extensions/backends/`` 下，CUDA 运行时
-  DLL（cublas/cudart）单独放在 ``backends/vendor/win-llama-cuda*-vendor-v2/``，
-  必须一并加进 PATH，否则 llama-server.exe 会以 0xC0000135 (DLL not found) 退出。
+- 支持两种布局：
+  * **自包含**（当前项目 runtime 用的就是这种，官方 release）：cudart/cublas
+    就在引擎目录里，不需要 vendor；
+  * **LM Studio 布局**：引擎在 ``~/.lmstudio/extensions/backends/`` 下，CUDA
+    运行时 DLL（cublas/cudart）单独放在 ``backends/vendor/win-llama-cuda*-vendor-v2/``，
+    必须一并加进 PATH，否则 llama-server.exe 会以 0xC0000135 (DLL not found) 退出。
 - 版本目录名形如 ``llama.cpp-win-x86_64-nvidia-cuda12-avx2-2.46.0``，
   末段是引擎版本，按版本号倒序挑选最新的 CUDA 构建。
 """

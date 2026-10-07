@@ -309,10 +309,16 @@ class LlamaBackendServer:
             last_error = detail
             self._cleanup_process()
             if outcome == "dll_missing":
+                vendor = self.backend.vendor_dir
+                hint = (
+                    f"vendor 目录: {vendor}（其中的 cudart/cublas 会加进 PATH）"
+                    if vendor else
+                    "该引擎是自包含构建（cudart/cublas 随引擎目录），"
+                    "请确认引擎目录文件完整，或重跑 scripts/fetch_runtime.py 恢复。"
+                )
                 raise RuntimeError(
                     "llama-server 启动失败：缺少 CUDA 运行时 DLL (0xC0000135)。\n"
-                    f"请确认存在 vendor 目录并把其中的 cudart/cublas DLL 加入 PATH。\n"
-                    f"当前 vendor: {self.backend.vendor_dir}\n{detail}"
+                    f"{hint}\n{detail}"
                 )
             # 注意：``fatal`` 也**继续试下一个 profile**，不再直接放弃。
             # 教训：llama.cpp 在内存吃紧时会以硬断言崩溃

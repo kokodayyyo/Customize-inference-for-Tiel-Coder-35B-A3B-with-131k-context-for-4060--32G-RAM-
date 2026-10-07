@@ -58,6 +58,10 @@ D:\anaconda\envs\test1\python.exe LLM-server\scripts\fetch_runtime.py
 会自动挑**最新的 CUDA12 引擎**并配对正确的 vendor DLL。没有 LM Studio 就用
 `--from "任意含 llama-server.exe 的目录"`，或自己编译 / 用官方 release。
 
+> 项目 `runtime/` 里现在是**单一引擎：官方 b11457 多 ISA 构建**（自动加载
+> AVX-512/repack/llamafile 内核，自带 CUDA 运行时）。它替换了原来的 LM Studio
+> 2.51.0（纯 AVX2）：实测 prefill +1.6%、decode 持平（见 NOTES 2.1）。
+
 **② 模型文件**（GGUF，需自行获取，放到任意位置后改配置指向它）：
 
 | 文件 | 体积 | 上下文 | 说明 |
@@ -163,7 +167,7 @@ decode **+15~36%**，其他场景零损失（见 NOTES 第 10 章）。
 |---|---|
 | 双击 bat 一闪而过 | 跑 `doctor.bat` 看报错 |
 | `unable to allocate CUDA_Host buffer` | 有残留实例占内存 → `stop_server.bat`（不是显存问题）|
-| `0xC0000135` / 找不到 DLL | vendor 目录没进 PATH，重跑 `fetch_runtime.py` |
+| `0xC0000135` / 找不到 DLL | 引擎或 CUDA DLL 不完整 → 重跑 `fetch_runtime.py` 恢复（LM Studio 布局还需配 vendor）|
 | 请求 502 且带后端日志 | 后端崩了：多为 ubatch>2048 或显存挤爆 |
 | 生成只有个位数 tok/s | 层没上 GPU / 专家掉到磁盘 / 显存颠簸（降 ubatch）|
 | 内网连不上 | 防火墙放行 8000、`proxy_host` 为 `0.0.0.0` |
@@ -229,7 +233,7 @@ LLM-server/
 │   ├── api/    gateway.py（转发）admin.py（/admin + ModelManager）middleware.py  metrics.py
 │   └── web/    index.html（控制台，单文件）
 ├── scripts/    （工具与测试，见 NOTES）
-└── runtime/    （llama.cpp 运行时不入库，fetch_runtime.py 恢复）
+└── runtime/    （llama.cpp 运行时不入库；当前为官方 b11457 自包含多 ISA 构建）
 ```
 
 > 原理推导、完整标定过程、测量方法论、脚本清单 → [`LLM-server/NOTES.md`](LLM-server/NOTES.md)。

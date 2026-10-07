@@ -16,28 +16,40 @@
 | 磁盘 | C: 81 GiB / D: 435 GiB / E: 530 GiB 可用 |
 | `test1` 环境 | Python 3.12.7，`torch 2.6.0+cu118`（**本方案不依赖 torch**）|
 | `XTTS` 环境 | `torch 2.5.1+cpu`，`cuda_available=False` → 不能用于 GPU 推理 |
-| llama.cpp | 本项目自带 `runtime/llama.cpp/backends/`（2.51.0 CUDA12，从 LM Studio 复制）|
+| llama.cpp | 本项目自带 `runtime/llama.cpp/backends/`（官方 b11457 多 ISA CUDA12，自包含）|
 
-## 2. 运行时自包含（已脱离 LM Studio）
+## 2. 运行时：官方 b11457 单引擎、自包含
 
-原先直接调用 `~/.lmstudio/extensions/backends/` 下的引擎。现已把**引擎目录 +
-CUDA vendor 目录**整体复制进项目：
+`runtime/llama.cpp/backends/` 里只保留一份引擎——官方 b11457 多 ISA 构建
+（2026-10 用它替换掉原来的 LM Studio 2.51.0；旧引擎与旧 vendor 目录均已删除）：
 
 ```
 runtime/llama.cpp/backends/
-├── llama.cpp-win-x86_64-nvidia-cuda12-avx2-2.51.0/   # 引擎 21 个文件 / 160 MiB
-└── vendor/win-llama-cuda12-vendor-v2/                # cudart/cublas/cublasLt / 752 MiB
+└── llama.cpp-win-x86_64-nvidia-cuda12-official-11457.0.0/   # 55 文件 / 1.11 GiB，自带 cudart/cublas/cublasLt
 ```
 
-共 912 MiB / 24 文件。验证方式：清空 `PATH` 后直接跑 `llama-server.exe
---list-devices`，rc=0 并正确列出 CUDA0 —— 证明不依赖 LM Studio 是否安装。
+- 官方引擎把 CUDA 运行时打进了自己目录，**不再需要单独的 vendor 目录**；
+  `core/backend.py` 的 `_find_vendor_dir` 找不到 vendor 时只把引擎目录加进 PATH，
+  自包含引擎走的就是这条路。（Windows 的 DLL 搜索本就先查 exe 同目录，vendor 多余。）
+- 验证方式：清空 `PATH` 后直接跑 `llama-server.exe --list-devices`，rc=0 并正确
+  列出 CUDA0 —— 证明不依赖 LM Studio 是否安装。
+- `core/backend.py` 的候选根目录里，项目自带目录**排第一**；LM Studio 的外部路径
+  （本机 `.lmstudio` 下还有若干旧版）只是后备，不会自动启用。
 
-`core/backend.py` 的候选根目录里，项目自带目录**排第一**，LM Studio 的路径
-降级为后备。所以 LM Studio 可以放心卸载。
+### 2.1 为什么换成官方构建（A/B 实测）
 
-**关键实现细节**：engine 目录与 vendor 目录必须按**后端家族**配对。CUDA 引擎配
-`win-llama-cuda12-vendor-v2`，Vulkan 配 `win-llama-vulkan-vendor-v2`，CPU 引擎
-不需要 vendor。配错会加载错误的运行时库。
+- 官方 `-v` 启动日志确认加载 `ggml-cpu-zen4.dll`：
+  `AVX512 = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | LLAMAFILE = 1 | REPACK = 1 | USE_GRAPHS = 1`
+  （被替换掉的 LM Studio 2.51.0 自报 `ggml_cpu_has_avx512 = 0`，纯 AVX2）。
+- **A/B（APEX、同参数、8 线程、两轮）**：prefill 1127（LM Studio AVX2）→
+  **1145 tok/s（官方，+1.6%，两轮都稳定）**；decode 打平（±1%）。结论：
+  **AVX-512 / repack / llamafile 内核在本题上没有实质收益**——再次印证瓶颈是
+  CPU 侧专家 GEMM 的**访存带宽**（~13 GB/s），不是指令宽度。
+- 目录名以 `-11457.0.0` 结尾是为了让 `_VERSION_RE = -(\d+\.\d+\.\d+)$` 能从目录名
+  解析出版本号（后端排序用；当年也借此排在 2.51.0 之前）。
+- 冒烟：替换后 `moe_probe`（应用等价 PATH）用新引擎加载成功
+  （decode 31.35 / prefill 1114，基准版模型）。
+- 想回退旧行为：用 `fetch_runtime.py` 重新引入任一 CUDA 引擎即可，排序按目录名版本号。
 
 ---
 
@@ -429,8 +441,12 @@ MoE 的"激活 3B"是**算力成本**，不是**显存需求**。35B 的权重�
 
 ### 6.1 `llama-server.exe` 报 `0xC0000135`
 
-CUDA 运行时不在引擎目录而在 `vendor/` 下，启动前必须把 vendor 加入 `PATH`。
-`core/backend.py` 会按后端家族自动配对。
+缺少 CUDA 运行时 DLL。分两种布局：
+
+- **自包含引擎**（当前项目 runtime 就是这种）：cudart/cublas 就在引擎目录里，
+  报这个错通常意味着引擎文件不完整 → 重跑 `scripts/fetch_runtime.py` 或重新解压官方包；
+- **LM Studio 布局**：CUDA 运行时在 `vendor/` 下，启动前必须把 vendor 加入 `PATH`，
+  `core/backend.py` 会按后端家族自动配对。
 
 ### 6.2 孤儿进程占显存
 
